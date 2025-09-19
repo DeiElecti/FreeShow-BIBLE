@@ -14,6 +14,13 @@ import type { Dictionary, Styles, Themes } from "../types/Settings"
 import type { Action, Emitter, ID, Overlays, ShowGroups, ShowList, Shows, ShowType, SlideTimer, Tag, Templates, Timer, Transition, TrimmedShows } from "../types/Show"
 import type { ServerData } from "../types/Socket"
 import type { ActiveStage, StageLayouts } from "../types/Stage"
+import type {
+    AutoDetectedScripture,
+    AutoTranscriptEntry,
+    ScriptureAutoSettings,
+    ScriptureAutoState,
+    ScriptureAutoStats
+} from "../types/Scripture"
 import type { BibleCategories, Categories, DrawerTabs, SettingsTabs, TopViews } from "../types/Tabs"
 import type { AudioChannel, AudioStream, Playlist } from "./../types/Audio"
 import type { Outputs } from "./../types/Output"
@@ -140,6 +147,50 @@ export const audioData: Writable<{ [key: string]: { metadata: ICommonTagsResult 
 export const customScriptureBooks: Writable<{ [key: string]: string[] }> = writable({})
 export const scriptureHistoryUsed: Writable<boolean> = writable(false)
 export const actionRevealUsed: Writable<boolean> = writable(false)
+export const scriptureAutoQueue: Writable<AutoDetectedScripture[]> = writable([])
+export const scriptureAutoSettings: Writable<ScriptureAutoSettings> = writable({
+    language: "en-US",
+    autoDisplay: false,
+    dedupeWindowMs: 15000,
+    autoStartListening: false,
+    themeId: "classic"
+})
+export const scriptureAutoState: Writable<ScriptureAutoState> = writable({
+    supported: true,
+    listening: false,
+    status: "",
+    partialTranscript: "",
+    lastHeardAt: null,
+    lastReference: null,
+    lastSource: null,
+    lastText: null,
+    lastConfidence: null,
+    activeBibleId: null,
+    activeBibleName: null,
+    activeScriptureId: null,
+    currentReference: null,
+    currentText: null,
+    currentTranslation: null,
+    currentAppliedAt: null,
+    currentSource: null,
+    currentAuto: false,
+    currentConfidence: null
+})
+export const scriptureAutoHistory: Writable<AutoDetectedScripture[]> = writable([])
+export const scriptureAutoTranscript: Writable<AutoTranscriptEntry[]> = writable([])
+export const scriptureAutoStats: Writable<ScriptureAutoStats> = writable({
+    startedAt: Date.now(),
+    lastUpdated: null,
+    detected: 0,
+    speechDetections: 0,
+    manualDetections: 0,
+    displayed: 0,
+    autoDisplayed: 0,
+    manualSubmissions: 0,
+    dismissed: 0,
+    confidenceSamples: 0,
+    averageConfidence: 0
+})
 
 // EDIT
 export const editColumns: Writable<number> = writable(1)

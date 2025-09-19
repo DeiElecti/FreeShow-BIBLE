@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { onMount } from "svelte"
+    import { get } from "svelte/store"
     import MainLayout from "./MainLayout.svelte"
     import MainOutput from "./MainOutput.svelte"
     import ContextMenu from "./components/context/ContextMenu.svelte"
@@ -20,6 +22,7 @@
     import { focusArea, logerror, mainClick, startAutosave, toggleRemoteStream } from "./utils/common"
     import { keydown } from "./utils/shortcuts"
     import { startup } from "./utils/startup"
+    import { initializeAutoScriptureService } from "./utils/scripture/autoService"
 
     startup()
 
@@ -54,6 +57,13 @@
     $: contrastColor = getContrast($themes[$theme]?.colors?.secondary || "")
     $: secondaryContrast = `--secondary-text: ${contrastColor === "#000000" ? "#131313" : "#f0f0ff"};`
     $: globalStyle = `${isWindows ? "height: calc(100% - 25px);" : ""}${secondaryContrast}${blending}`
+
+    onMount(() => {
+        const windowType = get(currentWindow)
+        if (windowType !== "output" && windowType !== "pdf") {
+            initializeAutoScriptureService()
+        }
+    })
 </script>
 
 <svelte:window on:keydown={keydown} on:mousedown={focusArea} on:click={mainClick} on:error={logerror} on:unhandledrejection={logerror} />

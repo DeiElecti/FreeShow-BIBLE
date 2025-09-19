@@ -92,3 +92,72 @@ export interface VerseText {
     reference: string // "Genesis 1:1"
     verseCount: number // 1
 }
+
+export interface AutoDetectedScripture {
+    id: string
+    osis: string
+    bibleId: string
+    bookNumber: number
+    chapter: number
+    verseStart: number
+    verseEnd: number
+    verses: string[]
+    reference: string
+    text: string
+    translation: string
+    source: string
+    createdAt: number
+    raw: string
+    confidence?: number
+}
+
+export interface ScriptureAutoSettings {
+    language: string
+    autoDisplay: boolean
+    dedupeWindowMs: number
+    autoStartListening: boolean
+    themeId: string
+}
+
+export interface ScriptureAutoState {
+    supported: boolean
+    listening: boolean
+    status: string
+    partialTranscript: string
+    lastHeardAt: number | null
+    lastReference: string | null
+    lastSource: string | null
+    lastText: string | null
+    lastConfidence: number | null
+    activeBibleId: string | null
+    activeBibleName: string | null
+    activeScriptureId: string | null
+    currentReference: string | null
+    currentText: string | null
+    currentTranslation: string | null
+    currentAppliedAt: number | null
+    currentSource: string | null
+    currentAuto: boolean
+    currentConfidence: number | null
+}
+
+export interface AutoTranscriptEntry {
+    id: string
+    timestamp: number
+    text: string
+    source: string
+}
+
+export interface ScriptureAutoStats {
+    startedAt: number
+    lastUpdated: number | null
+    detected: number
+    speechDetections: number
+    manualDetections: number
+    displayed: number
+    autoDisplayed: number
+    manualSubmissions: number
+    dismissed: number
+    confidenceSamples: number
+    averageConfidence: number
+}

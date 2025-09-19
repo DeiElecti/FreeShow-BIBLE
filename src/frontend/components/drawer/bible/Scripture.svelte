@@ -16,6 +16,9 @@
         outputs,
         playScripture,
         resized,
+        scriptureAutoQueue,
+        scriptureAutoSettings,
+        scriptureAutoState,
         scriptureHistory,
         scriptureHistoryUsed,
         scriptureMode,
@@ -38,6 +41,12 @@
     import Loader from "../../main/Loader.svelte"
     import Center from "../../system/Center.svelte"
     import { bookIds, fetchBible, formatBibleText, getColorCode, getVersePartLetter, joinRange, loadBible, receiveBibleContent, searchBibleAPI, setBooksCache, splitText } from "./scripture"
+    import AutoScripture from "./AutoScripture.svelte"
+    import type { AutoDetectedScripture } from "../../../../types/Scripture"
+    import {
+        applyAutoScriptureSuggestion,
+        toggleAutoScriptureListening
+    } from "../../../utils/scripture/autoService"
 
     export let active: string | null
     export let bibles: Bible[]
@@ -210,6 +219,14 @@
     }
 
     let notLoaded = false
+    let autoPanelOpen = false
+    const AUTO_BUTTON_TITLE = "Automatically detect scripture references"
+    let autoListening = false
+    let autoStatusText = ""
+    let autoButtonTitle = `${AUTO_BUTTON_TITLE}. Shift+Click to toggle listening.`
+    let queueLength = 0
+    let previousQueueLength = 0
+    let autoDisplayEnabled = false
     let listenerId = receiveMain(Main.BIBLE, (data) => {
         if (data.error === "not_found") {
             notLoaded = true
@@ -949,6 +966,35 @@
 
     // Update the displayed bible ID when index changes
     $: displayedBibleId = bibles[biblePreviewIndex]?.id || firstBibleId
+    let currentBibleName = ""
+    $: currentBibleName =
+        (displayedBible?.version as string) ||
+        $scriptures[displayedBibleId]?.customName ||
+        $scriptures[displayedBibleId]?.name ||
+        ""
+
+    $: {
+        const normalizedId = displayedBibleId || null
+        const normalizedName = currentBibleName || null
+        const normalizedScripture = active || null
+
+        scriptureAutoState.update((state) => {
+            if (
+                state.activeBibleId === normalizedId &&
+                state.activeBibleName === normalizedName &&
+                state.activeScriptureId === normalizedScripture
+            ) {
+                return state
+            }
+
+            return {
+                ...state,
+                activeBibleId: normalizedId,
+                activeBibleName: normalizedName,
+                activeScriptureId: normalizedScripture
+            }
+        })
+    }
 
     // Function to swap between available bible translations
     function swapDisplayedBible() {
@@ -992,15 +1038,53 @@
         splittedVerses[displayedId] = newVerses
     }
 
+    $: queueLength = $scriptureAutoQueue.length
+    $: autoDisplayEnabled = $scriptureAutoSettings.autoDisplay
+    $: {
+        if (!autoPanelOpen && !autoDisplayEnabled && queueLength > previousQueueLength) autoPanelOpen = true
+        previousQueueLength = queueLength
+    }
+    $: autoListening = $scriptureAutoState.listening
+    $: autoStatusText = ($scriptureAutoState.status || "").trim()
+    $: autoButtonTitle = `${AUTO_BUTTON_TITLE}${autoStatusText ? ` — ${autoStatusText}` : ""}. Shift+Click to toggle listening.`
+
     $: currentHistory = clone($scriptureHistory.filter((a) => a.id === bibles[0]?.id)).reverse()
 
     $: currentVerses = splittedVerses[displayedBibleId] || []
+
+    function handleAutoApply(event: CustomEvent<{ suggestion: AutoDetectedScripture; auto: boolean }>) {
+        const suggestion = event.detail?.suggestion
+        if (!suggestion) return
+
+        applyAutoScriptureSuggestion(suggestion, event.detail?.auto)
+
+        if (!event.detail.auto) autoPanelOpen = false
+    }
+
+    function handleAutoButtonClick(event: CustomEvent<{ ctrl?: boolean; shift?: boolean; alt?: boolean }>) {
+        const detail = event.detail || {}
+        if (detail.shift || detail.ctrl || detail.alt) {
+            toggleAutoScriptureListening()
+            return
+        }
+        autoPanelOpen = !autoPanelOpen
+    }
 </script>
 
 <svelte:window on:keydown={keydown} on:mouseup={mouseup} />
 
-<div class="scroll" style="flex: 1;overflow-y: auto;">
-    <div class="main">
+<div class="main-wrapper">
+    <div class="auto-overlay" class:hidden={!autoPanelOpen}>
+        <AutoScripture
+            bibleId={displayedBibleId}
+            bibleName={currentBibleName}
+            open={autoPanelOpen}
+            on:apply={handleAutoApply}
+            on:close={() => (autoPanelOpen = false)}
+        />
+    </div>
+    <div class="scroll" style="flex: 1;overflow-y: auto;">
+        <div class="main">
         {#if notLoaded || !bibles[0]}
             <Center faded>
                 <T id="error.bible" />
@@ -1264,6 +1348,7 @@
                 {/if}
             </div>
         {/if}
+        </div>
     </div>
 </div>
 
@@ -1334,6 +1419,22 @@
             </MaterialButton>
         {/if}
 
+        <MaterialButton
+            title={autoButtonTitle}
+            on:click={handleAutoButtonClick}
+            isActive={autoPanelOpen || autoListening}
+        >
+            <span class="auto-toggle" class:listening={autoListening}>
+                <Icon size={1.1} id="voice" white={!autoPanelOpen && !autoListening} />
+                {#if autoListening}
+                    <span class="listening-indicator" aria-hidden="true" />
+                {/if}
+                {#if queueLength}
+                    <span class="badge">{queueLength}</span>
+                {/if}
+            </span>
+        </MaterialButton>
+
         <MaterialButton title="scripture.search [Ctrl+B]" on:click={() => (searchBibleActive = true)}>
             <Icon size={1.1} id="search" white />
         </MaterialButton>
@@ -1341,6 +1442,64 @@
 {/if}
 
 <style>
+    .main-wrapper {
+        position: relative;
+        height: 100%;
+    }
+
+    .auto-overlay {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        z-index: 210;
+        pointer-events: none;
+        max-width: min(420px, calc(100% - 32px));
+    }
+
+    .auto-overlay.hidden {
+        display: none;
+    }
+
+    .auto-overlay :global(.auto-panel) {
+        pointer-events: auto;
+    }
+
+    .auto-toggle {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .auto-toggle.listening {
+        color: var(--secondary);
+    }
+
+    .auto-toggle .listening-indicator {
+        position: absolute;
+        top: -4px;
+        left: -8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--secondary);
+        box-shadow: 0 0 6px rgba(255, 216, 102, 0.7);
+    }
+
+    .auto-toggle .badge {
+        position: absolute;
+        top: -6px;
+        right: -10px;
+        background: var(--secondary);
+        color: #000;
+        border-radius: 999px;
+        padding: 0 6px;
+        font-size: 0.7em;
+        font-weight: 700;
+        min-width: 16px;
+        text-align: center;
+    }
+
     .main {
         display: flex;
         height: 100%;

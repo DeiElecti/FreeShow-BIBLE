@@ -80,7 +80,17 @@ import {
 } from "../stores"
 import { OUTPUT } from "./../../types/Channels"
 import type { SaveListSettings, SaveListSyncedSettings } from "./../../types/Save"
-import { currentWindow, maxConnections, outputs, scriptureSettings, scriptures, splitLines, transitionData, volume } from "./../stores"
+import {
+    currentWindow,
+    maxConnections,
+    outputs,
+    scriptureAutoSettings,
+    scriptureSettings,
+    scriptures,
+    splitLines,
+    transitionData,
+    volume
+} from "./../stores"
 import { checkForUpdates } from "./checkForUpdates"
 import { setLanguage } from "./language"
 import { send } from "./request"
@@ -295,6 +305,14 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
     resized: (v: any) => resized.set(v),
     scriptures: (v: any) => scriptures.set(v),
     scriptureSettings: (v: any) => scriptureSettings.set(v),
+    scriptureAutoSettings: (v: any) =>
+        scriptureAutoSettings.set({
+            language: v?.language || "en-US",
+            autoDisplay: v?.autoDisplay ?? false,
+            dedupeWindowMs: v?.dedupeWindowMs ?? 15000,
+            autoStartListening: v?.autoStartListening ?? false,
+            themeId: v?.themeId || "classic"
+        }),
     slidesOptions: (v: any) => slidesOptions.set(v),
     splitLines: (v: any) => splitLines.set(v),
     templateCategories: (v: any) => templateCategories.set(v),
