@@ -19,6 +19,8 @@ import type { AudioChannel, AudioStream, Playlist } from "./../types/Audio"
 import type { Outputs } from "./../types/Output"
 import type { DrawerTabIds } from "./../types/Tabs"
 import type { AudioData } from "./audio/audioPlayer"
+import type { AutoScriptureStatus, AutoScriptureSuggestion, AutoScriptureTranscriptEvent } from "../shared/autoScripture"
+import { DEFAULT_SERMON_LISTENER_SETTINGS } from "../shared/autoScripture"
 import type { API_metronome } from "./components/actions/api"
 
 // ----- TEMPORARY VARIABLES -----
@@ -276,6 +278,19 @@ export const sorted: Writable<any> = writable({}) // {}
 export const dataPath: Writable<string> = writable("") // ""
 export const lockedOverlays: Writable<string[]> = writable([]) // []
 export const special: Writable<any> = writable({}) // {}
+export const autoScriptureStatus: Writable<AutoScriptureStatus> = writable({
+    enabled: DEFAULT_SERMON_LISTENER_SETTINGS.enabled,
+    listening: false,
+    port: DEFAULT_SERMON_LISTENER_SETTINGS.port,
+    autoDisplay: DEFAULT_SERMON_LISTENER_SETTINGS.autoDisplay,
+    minConfidence: DEFAULT_SERMON_LISTENER_SETTINGS.minConfidence,
+    duplicateInterval: DEFAULT_SERMON_LISTENER_SETTINGS.duplicateInterval,
+    maxVerses: DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
+    scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
+    recognizedReferences: 0
+})
+export const autoScriptureSuggestions: Writable<AutoScriptureSuggestion[]> = writable([])
+export const autoScriptureTranscripts: Writable<AutoScriptureTranscriptEvent[]> = writable([])
 
 // SETTINGS
 export const language: Writable<string> = writable("en") // get locale

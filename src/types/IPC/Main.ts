@@ -3,6 +3,7 @@ import type { ExifData } from "exif"
 import type { Stats } from "fs"
 import type os from "os"
 import type { stores } from "../../electron/data/store"
+import type { AutoScriptureCommand, AutoScriptureStatus } from "../../shared/autoScripture"
 import type { Bible } from "../Bible"
 import type { ErrorLog, FileData, LessonsData, LyricSearchResult, MainFilePaths, Media, OS, Subtitle } from "../Main"
 import type { Output } from "../Output"
@@ -102,6 +103,7 @@ export enum Main {
     START = "START",
     STOP = "STOP",
     SERVER_DATA = "SERVER_DATA",
+    AUTO_SCRIPTURE = "AUTO_SCRIPTURE",
     WEBSOCKET_START = "WEBSOCKET_START",
     WEBSOCKET_STOP = "WEBSOCKET_STOP",
     API_TRIGGER = "API_TRIGGER",
@@ -176,6 +178,7 @@ export interface MainSendPayloads {
     [Main.PRESENTATION_CONTROL]: { action: string }
     [Main.START]: { ports: { [key: string]: number }; max: number; disabled: { [key: string]: boolean }; data: { [key: string]: ServerData } }
     [Main.SERVER_DATA]: { [key: string]: any }
+    [Main.AUTO_SCRIPTURE]: AutoScriptureCommand
     [Main.WEBSOCKET_START]: number
     [Main.API_TRIGGER]: { action: string; returnId: string; data: any }
     [Main.EMIT_OSC]: { signal: any; data: any }
@@ -230,6 +233,7 @@ export interface MainReturnPayloads {
     [Main.HISTORY]: { undo: History[]; redo: History[] }
     [Main.USAGE]: any
     [Main.CACHE]: any
+    [Main.AUTO_SCRIPTURE]: AutoScriptureStatus | void
     // WINDOW
     [Main.CLOSE]: boolean | void
     [Main.MAXIMIZED]: boolean

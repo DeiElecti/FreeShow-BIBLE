@@ -8,6 +8,7 @@ import type { MainResponses } from "../../types/IPC/Main"
 import { Main } from "../../types/IPC/Main"
 import type { ErrorLog, LyricSearchResult, OS } from "../../types/Main"
 import { setPlayingState, unsetPlayingAudio } from "../audio/nowPlaying"
+import { handleAutoScriptureCommand } from "../audio/sermonListener"
 import { chumsDisconnect, chumsLoadServices, chumsStartupLoad } from "../chums"
 import { restoreFiles } from "../data/backup"
 import { checkIfMediaDownloaded, downloadLessonsMedia, downloadMedia } from "../data/downloadMedia"
@@ -150,6 +151,7 @@ export const mainResponses: MainResponses = {
     [Main.START]: (data) => startServers(data),
     [Main.STOP]: () => closeServers(),
     [Main.SERVER_DATA]: (data) => updateServerData(data),
+    [Main.AUTO_SCRIPTURE]: (data) => handleAutoScriptureCommand(data),
     // WebSocket / REST / OSC
     [Main.WEBSOCKET_START]: (port) => startWebSocketAndRest(port),
     [Main.WEBSOCKET_STOP]: () => stopApiListener(),

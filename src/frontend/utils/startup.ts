@@ -9,6 +9,7 @@ import { startTracking } from "./analytics"
 import { wait, waitUntilValueIsDefined } from "./common"
 import { setLanguage } from "./language"
 import { storeSubscriber } from "./listeners"
+import { initAutoScripture } from "./autoScripture"
 import { receiveOUTPUTasOUTPUT, remoteListen, setupMainReceivers } from "./receivers"
 import { destroy, receive, send } from "./request"
 import { save, unsavedUpdater } from "./save"
@@ -51,6 +52,7 @@ async function startupMain() {
     await waitUntilValueIsDefined(() => get(loaded), 100, 8000)
     storeSubscriber()
     remoteListen()
+    initAutoScripture()
     checkStartupActions()
     autoBackup()
     startTracking()
