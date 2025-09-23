@@ -32,6 +32,8 @@ export interface SermonListenerSettings {
     contextWindow: number
     /** Additional hostnames or proxy URLs that should be surfaced in the UI. */
     customEndpoints: string[]
+    /** Shared secrets that must be provided when calling ingestion endpoints. */
+    authTokens: string[]
     /** Configuration for the built-in speech-recognition engine. */
     transcriber: SermonTranscriberSettings
 }
@@ -56,6 +58,7 @@ export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
     scriptureId: "",
     contextWindow: 12,
     customEndpoints: [],
+    authTokens: [],
     transcriber: { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
 }
 
@@ -106,6 +109,7 @@ export interface AutoScriptureStatus {
     httpEndpoints?: AutoScriptureEndpoint[]
     customEndpoints: string[]
     contextWindow: number
+    authRequired: boolean
     transcriberEngine: SermonTranscriberEngine
     transcriberReady: boolean
     transcriberMessage?: string

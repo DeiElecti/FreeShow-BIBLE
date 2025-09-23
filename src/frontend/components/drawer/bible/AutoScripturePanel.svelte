@@ -47,6 +47,7 @@
     let manualVerseStart = 1
     let manualVerseEnd = 1
     let customEndpointValue = ""
+    let authTokenValue = ""
 
     interface DisplayEndpoint {
         transcript: string
@@ -81,10 +82,12 @@
         const customList = Array.isArray(storedSettings.customEndpoints)
             ? [...storedSettings.customEndpoints]
             : [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints]
+        const tokenList = sanitizeAuthTokens(storedSettings.authTokens)
         listenerSettings = {
             ...DEFAULT_SERMON_LISTENER_SETTINGS,
             ...storedSettings,
             customEndpoints: customList,
+            authTokens: tokenList,
             transcriber: {
                 ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
                 ...(storedSettings.transcriber || {})
@@ -118,6 +121,9 @@
         })
 
         autoScriptureStatus.update((current) => {
+            if (key === "authTokens") {
+                return { ...current, authRequired: Array.isArray(value) ? value.length > 0 : current.authRequired }
+            }
             if (key in current) {
                 return { ...current, [key]: value }
             }
@@ -327,6 +333,24 @@
         return normalized.replace(/\/+$/, "")
     }
 
+    function sanitizeAuthTokens(value: unknown): string[] {
+        const list = Array.isArray(value) ? value : typeof value === "string" ? [value] : []
+        const seen = new Set<string>()
+        const tokens: string[] = []
+
+        list.forEach((entry) => {
+            if (typeof entry !== "string") return
+            const token = entry.trim()
+            if (!token) return
+            const key = token.toLowerCase()
+            if (seen.has(key)) return
+            seen.add(key)
+            tokens.push(token)
+        })
+
+        return tokens
+    }
+
     function getEndpointTypeLabel(type?: AutoScriptureEndpointType) {
         switch (type) {
             case "lan":
@@ -364,6 +388,77 @@
         if (index < 0 || index >= existing.length) return
         const updated = existing.filter((_, i) => i !== index)
         updateSetting("customEndpoints", updated)
+    }
+
+    function addAuthToken() {
+        const token = authTokenValue.trim()
+        if (!token) {
+            newToast("scripture.auto_listener_auth_token_invalid")
+            return
+        }
+
+        const existing = listenerSettings.authTokens || []
+        const exists = existing.some((entry) => entry.toLowerCase() === token.toLowerCase())
+        if (exists) {
+            newToast("scripture.auto_listener_auth_token_duplicate")
+            return
+        }
+
+        updateSetting("authTokens", [...existing, token])
+        authTokenValue = ""
+    }
+
+    function removeAuthToken(index: number) {
+        const existing = listenerSettings.authTokens || []
+        if (index < 0 || index >= existing.length) return
+        const updated = existing.filter((_, i) => i !== index)
+        updateSetting("authTokens", updated)
+    }
+
+    async function copyAuthToken(token: string, messageId = "scripture.auto_listener_auth_token_copied") {
+        if (!token) return
+        try {
+            await navigator.clipboard.writeText(token)
+            newToast(messageId)
+        } catch (err) {
+            console.warn("Failed to copy auto scripture token", err)
+            newToast("scripture.auto_listener_auth_token_copy_failed")
+        }
+    }
+
+    async function generateAuthToken() {
+        const existing = listenerSettings.authTokens || []
+        let token = ""
+        do {
+            token = createRandomToken()
+        } while (existing.some((entry) => entry.toLowerCase() === token.toLowerCase()))
+
+        updateSetting("authTokens", [...existing, token])
+        authTokenValue = ""
+        await copyAuthToken(token, "scripture.auto_listener_auth_token_generated")
+    }
+
+    function createRandomToken(bytes = 24) {
+        const cryptoObj: Crypto | undefined =
+            typeof globalThis !== "undefined" ? (globalThis.crypto as Crypto | undefined) : undefined
+
+        try {
+            if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+                const buffer = new Uint8Array(bytes)
+                cryptoObj.getRandomValues(buffer)
+                return Array.from(buffer, (value) => value.toString(16).padStart(2, "0")).join("")
+            }
+        } catch (err) {
+            console.warn("Falling back to Math.random for token generation", err)
+        }
+
+        let fallback = ""
+        for (let i = 0; i < bytes; i += 1) {
+            fallback += Math.floor(Math.random() * 256)
+                .toString(16)
+                .padStart(2, "0")
+        }
+        return fallback
     }
 
     function buildScriptureOptions(scripturesMap: Record<string, any>, dict: any) {
@@ -748,6 +843,65 @@
         </div>
     </div>
 
+    <div class="auth">
+        <div class="auth-header">
+            <h4><T id="scripture.auto_listener_auth" /></h4>
+            <span class="auth-status" class:required={status.authRequired}>
+                <T
+                    id={
+                        status.authRequired
+                            ? "scripture.auto_listener_auth_required"
+                            : "scripture.auto_listener_auth_optional"
+                    }
+                />
+            </span>
+        </div>
+        <p class="auth-hint"><T id="scripture.auto_listener_auth_hint" /></p>
+        <p class="auth-usage"><T id="scripture.auto_listener_auth_usage" /></p>
+        {#if listenerSettings.authTokens.length}
+            <ul>
+                {#each listenerSettings.authTokens as token, index (token)}
+                    <li>
+                        <code>{token}</code>
+                        <div class="token-actions">
+                            <MaterialButton
+                                icon="content_copy"
+                                variant="text"
+                                title="scripture.auto_listener_auth_copy"
+                                on:click={() => copyAuthToken(token)}
+                                small
+                            />
+                            <MaterialButton
+                                icon="delete"
+                                variant="text"
+                                title="scripture.auto_listener_auth_remove"
+                                on:click={() => removeAuthToken(index)}
+                                small
+                            />
+                        </div>
+                    </li>
+                {/each}
+            </ul>
+        {:else}
+            <p class="empty"><T id="scripture.auto_listener_auth_empty" /></p>
+        {/if}
+        <div class="auth-form">
+            <MaterialTextInput
+                label="scripture.auto_listener_auth_token_label"
+                placeholder={translateText("scripture.auto_listener_auth_token_placeholder")}
+                value={authTokenValue}
+                on:input={(e) => (authTokenValue = e.detail || "")}
+                on:change={(e) => (authTokenValue = e.detail || "")}
+            />
+            <MaterialButton icon="add" on:click={addAuthToken} small>
+                <T id="scripture.auto_listener_auth_add" />
+            </MaterialButton>
+            <MaterialButton icon="vpn_key" variant="text" on:click={generateAuthToken} small>
+                <T id="scripture.auto_listener_auth_generate" />
+            </MaterialButton>
+        </div>
+    </div>
+
     <div class="suggestions">
         <div class="suggestions-header">
             <h4><T id="scripture.auto_listener_queue" /></h4>
@@ -1117,6 +1271,86 @@
     }
 
     .custom-endpoint-form :global(.material-button) {
+        align-self: stretch;
+    }
+
+    .auth {
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .auth-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .auth-status {
+        margin: 0;
+        font-size: 0.8em;
+        opacity: 0.75;
+    }
+
+    .auth-status.required {
+        color: #ffb8b8;
+        opacity: 1;
+    }
+
+    .auth-hint,
+    .auth-usage {
+        margin: 0;
+        font-size: 0.8em;
+        opacity: 0.75;
+    }
+
+    .auth ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .auth li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 6px;
+        padding: 8px 10px;
+    }
+
+    .auth code {
+        word-break: break-all;
+        font-size: 0.85em;
+        flex: 1;
+    }
+
+    .token-actions {
+        display: flex;
+        gap: 4px;
+    }
+
+    .auth-form {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        flex-wrap: wrap;
+    }
+
+    .auth-form :global(.textfield) {
+        flex: 1;
+        min-width: 180px;
+    }
+
+    .auth-form :global(.material-button) {
         align-self: stretch;
     }
 

@@ -39,7 +39,12 @@ interface TranscriptPayload {
     source?: string
 }
 
-let settings: SermonListenerSettings = { ...DEFAULT_SERMON_LISTENER_SETTINGS }
+let settings: SermonListenerSettings = {
+    ...DEFAULT_SERMON_LISTENER_SETTINGS,
+    customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
+    authTokens: [...DEFAULT_SERMON_LISTENER_SETTINGS.authTokens],
+    transcriber: { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
+}
 let status: AutoScriptureStatus = {
     enabled: DEFAULT_SERMON_LISTENER_SETTINGS.enabled,
     listening: false,
@@ -55,6 +60,7 @@ let status: AutoScriptureStatus = {
     httpEndpoints: [],
     customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
     contextWindow: DEFAULT_SERMON_LISTENER_SETTINGS.contextWindow,
+    authRequired: false,
     transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
     transcriberReady: false,
     transcriberMessage: undefined,
@@ -71,6 +77,7 @@ let transcriber: SermonTranscriber | null = null
 const transcriptHistory: AutoScriptureTranscriptEvent[] = []
 const suggestionHistory: AutoScriptureSuggestion[] = []
 const transcriptContext: { text: string; timestamp: number }[] = []
+let authTokenSet: Set<string> = new Set()
 interface SseClient {
     id: string
     res: Response
@@ -169,6 +176,7 @@ function readSettings(): SermonListenerSettings {
           )
         : []
 
+    const authTokens = normalizeAuthTokens((stored as any)?.authTokens)
     const transcriber = sanitizeTranscriberSettings((stored as any)?.transcriber)
 
     const contextWindow =
@@ -186,6 +194,7 @@ function readSettings(): SermonListenerSettings {
         scriptureId: stored.scriptureId ?? DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
         contextWindow,
         customEndpoints,
+        authTokens,
         transcriber
     }
 
@@ -196,6 +205,8 @@ function applySettings(newSettings: SermonListenerSettings) {
     const mustRestart = settings.enabled !== newSettings.enabled || settings.port !== newSettings.port
     settings = newSettings
 
+    updateAuthTokenSet(settings.authTokens || [])
+
     status.enabled = settings.enabled
     status.port = settings.port
     status.autoDisplay = settings.autoDisplay
@@ -205,6 +216,7 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.scriptureId = settings.scriptureId
     status.customEndpoints = [...settings.customEndpoints]
     status.contextWindow = settings.contextWindow
+    status.authRequired = hasAuthTokens()
     status.transcriberEngine = settings.transcriber?.engine ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine
     status.transcriberSampleRate = settings.transcriber?.sampleRate ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate
     status.transcriberPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
@@ -248,6 +260,7 @@ function startServer() {
     expressApp.use(express.json({ limit: "1mb" }))
 
     expressApp.post("/transcript", (req: Request, res: Response) => {
+        if (!authorizeRequest(req, res)) return
         const { text, confidence, speaker, timestamp, source, reference, references, transcript } = req.body || {}
 
         if (typeof text !== "string" || !text.trim()) {
@@ -280,6 +293,7 @@ function startServer() {
     })
 
     expressApp.post("/reference", (req: Request, res: Response) => {
+        if (!authorizeRequest(req, res)) return
         const { reference, references, confidence, source, timestamp, transcript } = req.body || {}
 
         const result = ingestExternalReferences({
@@ -303,6 +317,7 @@ function startServer() {
     })
 
     expressApp.post("/trigger", (req: Request, res: Response) => {
+        if (!authorizeRequest(req, res)) return
         const { reference, references, confidence, source, timestamp, transcript, allowDuplicates } = req.body || {}
 
         const result = triggerExternalReferences({
@@ -326,7 +341,8 @@ function startServer() {
         res.status(202).json({ status: "triggered", triggered: result.accepted })
     })
 
-    expressApp.get("/health", (_req: Request, res: Response) => {
+    expressApp.get("/health", (req: Request, res: Response) => {
+        if (!authorizeRequest(req, res)) return
         res.json({
             enabled: settings.enabled,
             listening: status.listening,
@@ -336,14 +352,17 @@ function startServer() {
     })
 
     expressApp.get("/status", (_req: Request, res: Response) => {
+        if (!authorizeRequest(_req, res)) return
         res.json(buildStatusReport())
     })
 
     expressApp.get("/settings", (_req: Request, res: Response) => {
+        if (!authorizeRequest(_req, res)) return
         res.json({ settings: cloneListenerSettings(settings) })
     })
 
     expressApp.patch("/settings", (req: Request, res: Response) => {
+        if (!authorizeRequest(req, res)) return
         const payload = req.body
         if (!payload || typeof payload !== "object") {
             res.status(400).json({ error: "Invalid settings payload" })
@@ -359,6 +378,7 @@ function startServer() {
     })
 
     expressApp.get("/events", (req: Request, res: Response) => {
+        if (!authorizeRequest(req, res)) return
         res.setHeader("Content-Type", "text/event-stream")
         res.setHeader("Cache-Control", "no-cache")
         res.setHeader("Connection", "keep-alive")
@@ -389,6 +409,7 @@ function startServer() {
         status.listening = true
         status.httpEndpoints = buildHttpEndpoints(settings.port, settings.customEndpoints)
         status.httpEndpoint = status.httpEndpoints[0]?.url
+        status.authRequired = hasAuthTokens()
         scheduleTranscriberUpdate()
         emitStatus()
     })
@@ -417,6 +438,7 @@ function stopServer() {
     status.httpEndpoint = undefined
     status.httpEndpoints = []
     status.customEndpoints = [...settings.customEndpoints]
+    status.authRequired = hasAuthTokens()
     ensureTranscriber()?.setActive(false)
     clearTranscriptContext()
 }
@@ -1093,6 +1115,7 @@ function mergeListenerSettings(update: AutoScriptureSettingsUpdate): SermonListe
     const base: SermonListenerSettings = {
         ...settings,
         customEndpoints: [...settings.customEndpoints],
+        authTokens: [...settings.authTokens],
         transcriber: { ...settings.transcriber }
     }
 
@@ -1130,6 +1153,10 @@ function mergeListenerSettings(update: AutoScriptureSettingsUpdate): SermonListe
 
     if (Object.prototype.hasOwnProperty.call(update, "customEndpoints")) {
         base.customEndpoints = sanitizeCustomEndpointUpdate((update as any).customEndpoints, base.customEndpoints)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "authTokens")) {
+        base.authTokens = sanitizeAuthTokensUpdate((update as any).authTokens, base.authTokens)
     }
 
     if (Object.prototype.hasOwnProperty.call(update, "transcriber")) {
@@ -1239,6 +1266,120 @@ function uniqueNormalizedEndpoints(values: unknown[]): string[] {
     return result
 }
 
+function normalizeAuthTokens(value: unknown): string[] {
+    if (Array.isArray(value)) return uniqueAuthTokens(value)
+    if (typeof value === "string") return uniqueAuthTokens([value])
+    if (!value || typeof value !== "object") return []
+    if (Array.isArray((value as any).tokens)) return uniqueAuthTokens((value as any).tokens)
+    return []
+}
+
+function sanitizeAuthTokensUpdate(value: unknown, base: string[]): string[] {
+    if (Array.isArray(value)) return uniqueAuthTokens(value)
+    if (typeof value === "string") return uniqueAuthTokens([value])
+    if (!value || typeof value !== "object") return uniqueAuthTokens(base)
+
+    let next = uniqueAuthTokens(base)
+    const additions = extractAuthTokenList((value as any).add)
+    if (additions.length) next = uniqueAuthTokens([...next, ...additions])
+
+    const removals = extractAuthTokenList((value as any).remove)
+    if (removals.length) {
+        const removeKeys = new Set(removals.map((token) => token.toLowerCase()))
+        next = next.filter((token) => !removeKeys.has(token.toLowerCase()))
+    }
+
+    return next
+}
+
+function extractAuthTokenList(value: unknown): string[] {
+    if (Array.isArray(value)) return uniqueAuthTokens(value)
+    if (typeof value === "string") return uniqueAuthTokens([value])
+    return []
+}
+
+function uniqueAuthTokens(values: unknown[]): string[] {
+    const seen = new Set<string>()
+    const tokens: string[] = []
+
+    values.forEach((entry) => {
+        if (typeof entry !== "string") return
+        const token = entry.trim()
+        if (!token) return
+        const key = token.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        tokens.push(token)
+    })
+
+    return tokens
+}
+
+function updateAuthTokenSet(tokens: string[]) {
+    authTokenSet = new Set(uniqueAuthTokens(tokens))
+}
+
+function hasAuthTokens(): boolean {
+    return authTokenSet.size > 0
+}
+
+function parseAuthorizationHeader(value: string | undefined): string | undefined {
+    if (!value) return undefined
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    const bearer = trimmed.match(/^Bearer\s+(.+)$/i)
+    if (bearer && bearer[1]) return bearer[1].trim()
+    return trimmed
+}
+
+function extractAuthToken(req: Request): string | undefined {
+    const authHeader = req.headers.authorization
+    if (Array.isArray(authHeader)) {
+        for (const entry of authHeader) {
+            const parsed = parseAuthorizationHeader(entry)
+            if (parsed) return parsed
+        }
+    } else {
+        const parsed = parseAuthorizationHeader(authHeader)
+        if (parsed) return parsed
+    }
+
+    const apiKeyHeader = req.headers["x-api-key"]
+    if (Array.isArray(apiKeyHeader)) {
+        for (const entry of apiKeyHeader) {
+            if (typeof entry === "string" && entry.trim()) return entry.trim()
+        }
+    } else if (typeof apiKeyHeader === "string" && apiKeyHeader.trim()) {
+        return apiKeyHeader.trim()
+    }
+
+    const queryToken = req.query?.token
+    if (Array.isArray(queryToken)) {
+        for (const entry of queryToken) {
+            if (typeof entry === "string" && entry.trim()) return entry.trim()
+        }
+    } else if (typeof queryToken === "string" && queryToken.trim()) {
+        return queryToken.trim()
+    }
+
+    const bodyToken = (req.body as any)?.token
+    if (typeof bodyToken === "string" && bodyToken.trim()) {
+        return bodyToken.trim()
+    }
+
+    return undefined
+}
+
+function authorizeRequest(req: Request, res: Response): boolean {
+    if (!hasAuthTokens()) return true
+
+    const token = extractAuthToken(req)
+    if (token && authTokenSet.has(token)) return true
+
+    res.status(401).json({ error: "Authentication required" })
+    return false
+}
+
 function persistListenerSettings(data: SermonListenerSettings) {
     const special = stores.SETTINGS.get("special") || {}
     const listenerSettingsPayload = cloneListenerSettings(data)
@@ -1251,6 +1392,7 @@ function cloneListenerSettings(data: SermonListenerSettings): SermonListenerSett
     return {
         ...data,
         customEndpoints: [...data.customEndpoints],
+        authTokens: [...data.authTokens],
         transcriber: { ...data.transcriber }
     }
 }
