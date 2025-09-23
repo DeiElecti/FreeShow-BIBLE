@@ -15,10 +15,12 @@ import { sendMain } from "../IPC/main"
 import { activeDrawerTab, autoScriptureStatus, autoScriptureSuggestions, autoScriptureTranscripts, drawerTabsData, openScripture, scriptures, special } from "../stores"
 
 let initialized = false
+const forcedSuggestionIds = new Set<string>()
 
 function resetQueues() {
     autoScriptureSuggestions.set([])
     autoScriptureTranscripts.set([])
+    forcedSuggestionIds.clear()
 }
 
 export function initAutoScripture() {
@@ -37,6 +39,9 @@ export function initAutoScripture() {
                     break
                 case "TRANSCRIPT":
                     appendTranscript(msg.data as AutoScriptureTranscriptEvent)
+                    break
+                case "TRIGGER":
+                    handleTriggerEvent(msg.data as AutoScriptureSuggestion[])
                     break
                 case "RESET":
                     resetQueues()
@@ -124,6 +129,10 @@ function queueSuggestion(suggestion: AutoScriptureSuggestion) {
     suggestion.formatted = suggestion.formatted || formatScriptureReference(suggestion.reference)
 
     autoScriptureSuggestions.update((items) => {
+        if (forcedSuggestionIds.has(suggestion.id)) {
+            forcedSuggestionIds.delete(suggestion.id)
+            return items.filter((item) => item.id !== suggestion.id)
+        }
         const existingIndex = items.findIndex((item) => item.id === suggestion.id)
         if (existingIndex > -1) {
             const updated = [...items]
@@ -145,6 +154,23 @@ function queueSuggestion(suggestion: AutoScriptureSuggestion) {
     if (get(autoScriptureStatus).autoDisplay) {
         setTimeout(() => acceptAutoScripture(suggestion.id), 100)
     }
+}
+
+function handleTriggerEvent(entries: AutoScriptureSuggestion[] | AutoScriptureSuggestion | undefined) {
+    const list = Array.isArray(entries) ? entries : entries ? [entries] : []
+    list.forEach((entry) => {
+        if (!entry?.reference || !entry.id) return
+        forcedSuggestionIds.add(entry.id)
+        const queued = get(autoScriptureSuggestions).some((item) => item.id === entry.id)
+        const displayed = triggerScripture(entry.reference)
+        if (!displayed) {
+            newToast("Unable to display scripture – no Bible version configured.")
+        }
+        dismissAutoScripture(entry.id)
+        if (queued) {
+            forcedSuggestionIds.delete(entry.id)
+        }
+    })
 }
 
 function appendTranscript(event: AutoScriptureTranscriptEvent) {

@@ -50,6 +50,7 @@ let status: AutoScriptureStatus = {
     maxVerses: DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
     scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
     recognizedReferences: 0,
+    lastTriggerAt: undefined,
     httpEndpoint: undefined,
     httpEndpoints: [],
     customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
@@ -121,6 +122,17 @@ export function handleAutoScriptureCommand(command: AutoScriptureCommand): AutoS
                 source: command.source ?? "manual",
                 timestamp: command.timestamp,
                 transcript: command.transcript
+            })
+            return emitStatus()
+        case "TRIGGER_REFERENCE":
+            triggerExternalReferences({
+                reference: command.reference,
+                references: command.references,
+                confidence: command.confidence,
+                source: command.source ?? "manual",
+                timestamp: command.timestamp,
+                transcript: command.transcript,
+                allowDuplicates: command.allowDuplicates
             })
             return emitStatus()
         case "UPDATE_SETTINGS":
@@ -290,6 +302,30 @@ function startServer() {
         res.status(202).json({ status: "accepted", accepted: result.accepted })
     })
 
+    expressApp.post("/trigger", (req: Request, res: Response) => {
+        const { reference, references, confidence, source, timestamp, transcript, allowDuplicates } = req.body || {}
+
+        const result = triggerExternalReferences({
+            reference: reference && typeof reference === "object" ? (reference as AutoScriptureExternalReference) : undefined,
+            references: Array.isArray(references)
+                ? (references as AutoScriptureExternalReference[]).filter((entry) => entry && typeof entry === "object")
+                : undefined,
+            confidence: typeof confidence === "number" ? confidence : undefined,
+            source: typeof source === "string" ? source : "http",
+            timestamp: typeof timestamp === "number" ? timestamp : undefined,
+            transcript: typeof transcript === "string" ? transcript : undefined,
+            allowDuplicates: sanitizeBoolean(allowDuplicates, true)
+        })
+
+        if (!result.accepted) {
+            res.status(400).json({ error: "No valid scripture references supplied" })
+            return
+        }
+
+        emitStatus()
+        res.status(202).json({ status: "triggered", triggered: result.accepted })
+    })
+
     expressApp.get("/health", (_req: Request, res: Response) => {
         res.json({
             enabled: settings.enabled,
@@ -392,9 +428,20 @@ interface ExternalIngestOptions {
     source?: string
     timestamp?: number
     transcript?: string
+    allowDuplicates?: boolean
+    enforceConfidence?: boolean
 }
 
-function ingestExternalReferences({ reference, references, confidence, source, timestamp, transcript }: ExternalIngestOptions) {
+function ingestExternalReferences({
+    reference,
+    references,
+    confidence,
+    source,
+    timestamp,
+    transcript,
+    allowDuplicates,
+    enforceConfidence
+}: ExternalIngestOptions) {
     const items: AutoScriptureExternalReference[] = []
     if (reference) items.push(reference)
     if (Array.isArray(references)) {
@@ -403,11 +450,12 @@ function ingestExternalReferences({ reference, references, confidence, source, t
         })
     }
 
-    if (!items.length && !transcript) return { accepted: 0, transcriptLogged: false }
+    if (!items.length && !transcript) return { accepted: 0, transcriptLogged: false, suggestions: [] }
 
     const baseTimestamp = typeof timestamp === "number" ? timestamp : Date.now()
     let accepted = 0
     let transcriptLogged = false
+    const suggestions: AutoScriptureSuggestion[] = []
 
     const cleanSource = typeof source === "string" ? source : undefined
     const cleanConfidence = typeof confidence === "number" ? confidence : undefined
@@ -434,14 +482,16 @@ function ingestExternalReferences({ reference, references, confidence, source, t
         if (!normalized) return
 
         const refConfidence = resolveConfidence(rawReference, cleanConfidence)
-        if (typeof refConfidence === "number" && refConfidence < settings.minConfidence) return
+        const shouldEnforce = enforceConfidence !== undefined ? enforceConfidence : true
+        if (shouldEnforce && typeof refConfidence === "number" && refConfidence < settings.minConfidence) return
 
         const refSource = resolveSource(rawReference, cleanSource)
         const refTranscript = resolveTranscript(rawReference, cleanTranscript)
         const refTimestamp = resolveTimestamp(rawReference, baseTimestamp, index)
 
         const key = createReferenceKey(normalized)
-        if (shouldSkipReference(key, refTimestamp)) return
+        const skipDuplicates = allowDuplicates !== true
+        if (skipDuplicates && shouldSkipReference(key, refTimestamp)) return
 
         seenReferences.set(key, refTimestamp)
         status.recognizedReferences += 1
@@ -457,11 +507,29 @@ function ingestExternalReferences({ reference, references, confidence, source, t
             formatted: normalized.formatted
         }
 
-        sendSuggestion(suggestion)
+        const payload = sendSuggestion(suggestion)
+        suggestions.push(payload)
         accepted += 1
     })
 
-    return { accepted, transcriptLogged }
+    return { accepted, transcriptLogged, suggestions }
+}
+
+function triggerExternalReferences(options: ExternalIngestOptions) {
+    const allowDuplicates = options.allowDuplicates !== undefined ? options.allowDuplicates : true
+    const result = ingestExternalReferences({
+        ...options,
+        allowDuplicates,
+        enforceConfidence: false
+    })
+
+    const triggered = result.suggestions ?? []
+    if (triggered.length) {
+        status.lastTriggerAt = triggered[triggered.length - 1]?.timestamp ?? Date.now()
+        sendTriggerEvent(triggered)
+    }
+
+    return result
 }
 
 function resolveConfidence(reference: AutoScriptureExternalReference, fallback?: number) {
@@ -676,8 +744,9 @@ function buildHttpEndpoints(port: number, custom: string[] = []): AutoScriptureE
         const statusUrl = normalized.replace(/\/transcript$/i, "/status")
         const events = normalized.replace(/\/transcript$/i, "/events")
         const settingsUrl = normalized.replace(/\/transcript$/i, "/settings")
+        const triggerUrl = normalized.replace(/\/transcript$/i, "/trigger")
 
-        endpoints.push({ url: normalized, type, reference, status: statusUrl, events, settings: settingsUrl })
+        endpoints.push({ url: normalized, type, reference, status: statusUrl, events, settings: settingsUrl, trigger: triggerUrl })
     }
 
     pushEndpoint(`http://127.0.0.1:${port}/transcript`, "loopback")
@@ -750,11 +819,19 @@ function sendTranscriptEvent(event: TranscriptPayload) {
     broadcastSse("transcript", payload)
 }
 
-function sendSuggestion(suggestion: AutoScriptureSuggestion) {
+function sendSuggestion(suggestion: AutoScriptureSuggestion): AutoScriptureSuggestion {
     const payload = cloneSuggestion(suggestion)
     recordSuggestion(payload)
     toApp(SCRIPTURE_AUTO, { channel: "SUGGESTION", data: payload })
     broadcastSse("suggestion", payload)
+    return payload
+}
+
+function sendTriggerEvent(suggestions: AutoScriptureSuggestion[]) {
+    if (!suggestions?.length) return
+    const payload = suggestions.map((entry) => cloneSuggestion(entry))
+    toApp(SCRIPTURE_AUTO, { channel: "TRIGGER", data: payload })
+    broadcastSse("trigger", payload)
 }
 
 function sendReset() {

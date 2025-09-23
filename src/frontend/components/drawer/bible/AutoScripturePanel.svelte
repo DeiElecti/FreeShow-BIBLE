@@ -51,6 +51,7 @@
     interface DisplayEndpoint {
         transcript: string
         reference: string
+        trigger: string
         status: string
         events: string
         settings: string
@@ -60,6 +61,7 @@
     let status: AutoScriptureStatus
     let endpointList: DisplayEndpoint[] = []
     let primaryReferenceEndpoint = ""
+    let primaryTriggerEndpoint = ""
     let primaryStatusEndpoint = ""
     let primaryEventsEndpoint = ""
     let primarySettingsEndpoint = ""
@@ -91,6 +93,7 @@
     }
     $: endpointList = buildEndpointList(status, listenerSettings)
     $: primaryReferenceEndpoint = endpointList[0]?.reference || ""
+    $: primaryTriggerEndpoint = endpointList[0]?.trigger || ""
     $: primaryStatusEndpoint = endpointList[0]?.status || ""
     $: primaryEventsEndpoint = endpointList[0]?.events || ""
     $: primarySettingsEndpoint = endpointList[0]?.settings || ""
@@ -246,12 +249,14 @@
             seen.add(transcript)
 
             const reference = normalizeEndpointVariant(endpoint.reference, transcript, "/reference")
+            const trigger = normalizeEndpointVariant(endpoint.trigger, transcript, "/trigger")
             const statusUrl = normalizeEndpointVariant(endpoint.status, transcript, "/status")
             const eventsUrl = normalizeEndpointVariant(endpoint.events, transcript, "/events")
             const settingsUrl = normalizeEndpointVariant(endpoint.settings, transcript, "/settings")
             collected.push({
                 transcript,
                 reference,
+                trigger,
                 status: statusUrl,
                 events: eventsUrl,
                 settings: settingsUrl,
@@ -456,6 +461,24 @@
                 <div class="endpoint" class:inactive={!status.listening}>
                     <div class="endpoint-info">
                         <span class="endpoint-label">
+                            <T id="scripture.auto_listener_endpoint_trigger" />
+                            <span class="endpoint-type">
+                                <T id={getEndpointTypeLabel(endpoint.type)} />
+                            </span>
+                        </span>
+                        <code>{endpoint.trigger}</code>
+                    </div>
+                    <MaterialButton
+                        icon="content_copy"
+                        variant="text"
+                        title="scripture.auto_listener_copy"
+                        on:click={() => copyValue(endpoint.trigger)}
+                        small
+                    />
+                </div>
+                <div class="endpoint" class:inactive={!status.listening}>
+                    <div class="endpoint-info">
+                        <span class="endpoint-label">
                             <T id="scripture.auto_listener_endpoint_status" />
                             <span class="endpoint-type">
                                 <T id={getEndpointTypeLabel(endpoint.type)} />
@@ -517,6 +540,11 @@
                 <T id="scripture.auto_listener_reference_help" replace={[primaryReferenceEndpoint]} />
             </p>
         {/if}
+        {#if primaryTriggerEndpoint}
+            <p class="endpoint-help">
+                <T id="scripture.auto_listener_trigger_help" replace={[primaryTriggerEndpoint]} />
+            </p>
+        {/if}
         {#if primaryStatusEndpoint}
             <p class="endpoint-help">
                 <T id="scripture.auto_listener_status_help" replace={[primaryStatusEndpoint]} />
@@ -553,6 +581,10 @@
         <p>
             <strong><T id="scripture.auto_listener_last_reference" /></strong>
             <span>{formatTimestamp(status.lastSuggestionAt)}</span>
+        </p>
+        <p>
+            <strong><T id="scripture.auto_listener_last_trigger" /></strong>
+            <span>{formatTimestamp(status.lastTriggerAt)}</span>
         </p>
     </div>
 

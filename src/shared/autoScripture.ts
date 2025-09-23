@@ -101,6 +101,7 @@ export interface AutoScriptureStatus {
     recognizedReferences: number
     lastTranscriptAt?: number
     lastSuggestionAt?: number
+    lastTriggerAt?: number
     httpEndpoint?: string
     httpEndpoints?: AutoScriptureEndpoint[]
     customEndpoints: string[]
@@ -133,6 +134,7 @@ export interface AutoScriptureEndpoint {
     status?: string
     events?: string
     settings?: string
+    trigger?: string
 }
 
 export type AutoScriptureCommand =
@@ -158,6 +160,16 @@ export type AutoScriptureCommand =
     | {
           action: "UPDATE_SETTINGS"
           settings: AutoScriptureSettingsUpdate
+      }
+    | {
+          action: "TRIGGER_REFERENCE"
+          reference?: AutoScriptureExternalReference
+          references?: AutoScriptureExternalReference[]
+          confidence?: number
+          source?: string
+          timestamp?: number
+          transcript?: string
+          allowDuplicates?: boolean
       }
 
 export interface AutoScriptureExternalReference {
