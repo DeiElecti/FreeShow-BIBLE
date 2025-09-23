@@ -39,7 +39,8 @@ let status: AutoScriptureStatus = {
     scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
     recognizedReferences: 0,
     httpEndpoint: undefined,
-    httpEndpoints: []
+    httpEndpoints: [],
+    customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints]
 }
 
 let httpServer: http.Server | null = null
@@ -108,6 +109,16 @@ function readSettings(): SermonListenerSettings {
     const special = stores.SETTINGS.get("special") || {}
     const stored: Partial<SermonListenerSettings> = special?.sermonListener || {}
 
+    const customEndpoints = Array.isArray(stored.customEndpoints)
+        ? Array.from(
+              new Set(
+                  stored.customEndpoints
+                      .map((entry) => normalizeCustomEndpoint(entry))
+                      .filter((entry): entry is string => typeof entry === "string" && !!entry)
+              )
+          )
+        : []
+
     const sanitized: SermonListenerSettings = {
         enabled: stored.enabled ?? DEFAULT_SERMON_LISTENER_SETTINGS.enabled,
         autoDisplay: stored.autoDisplay ?? DEFAULT_SERMON_LISTENER_SETTINGS.autoDisplay,
@@ -115,7 +126,8 @@ function readSettings(): SermonListenerSettings {
         minConfidence: typeof stored.minConfidence === "number" ? Math.min(Math.max(stored.minConfidence, 0), 1) : DEFAULT_SERMON_LISTENER_SETTINGS.minConfidence,
         duplicateInterval: typeof stored.duplicateInterval === "number" && stored.duplicateInterval > 0 ? stored.duplicateInterval : DEFAULT_SERMON_LISTENER_SETTINGS.duplicateInterval,
         maxVerses: typeof stored.maxVerses === "number" && stored.maxVerses > 0 ? Math.max(1, Math.floor(stored.maxVerses)) : DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
-        scriptureId: stored.scriptureId ?? DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId
+        scriptureId: stored.scriptureId ?? DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
+        customEndpoints
     }
 
     return sanitized
@@ -132,6 +144,7 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.duplicateInterval = settings.duplicateInterval
     status.maxVerses = settings.maxVerses
     status.scriptureId = settings.scriptureId
+    status.customEndpoints = [...settings.customEndpoints]
     if (!settings.enabled) {
         status.httpEndpoint = undefined
         status.httpEndpoints = []
@@ -147,8 +160,8 @@ function applySettings(newSettings: SermonListenerSettings) {
         return
     }
 
-    status.httpEndpoint = `http://127.0.0.1:${settings.port}/transcript`
-    status.httpEndpoints = buildHttpEndpoints(settings.port)
+    status.httpEndpoints = buildHttpEndpoints(settings.port, settings.customEndpoints)
+    status.httpEndpoint = status.httpEndpoints[0]?.url
     emitStatus()
 }
 
@@ -225,7 +238,7 @@ function startServer() {
 
     httpServer = expressApp.listen(settings.port, "0.0.0.0", () => {
         status.listening = true
-        status.httpEndpoints = buildHttpEndpoints(settings.port)
+        status.httpEndpoints = buildHttpEndpoints(settings.port, settings.customEndpoints)
         status.httpEndpoint = status.httpEndpoints[0]?.url
         emitStatus()
     })
@@ -240,17 +253,19 @@ function startServer() {
 }
 
 function stopServer() {
-    if (!httpServer) return
-    try {
-        httpServer.close()
-    } catch (err) {
-        console.warn("Failed to close sermon listener server:", err)
+    if (httpServer) {
+        try {
+            httpServer.close()
+        } catch (err) {
+            console.warn("Failed to close sermon listener server:", err)
+        }
     }
     httpServer = null
     expressApp = null
     status.listening = false
     status.httpEndpoint = undefined
     status.httpEndpoints = []
+    status.customEndpoints = [...settings.customEndpoints]
 }
 
 interface ExternalIngestOptions {
@@ -502,7 +517,7 @@ function createReferenceKey(reference: AutoScriptureSuggestion["reference"]) {
     return `${reference.bookOsis}.${chapter}-${endChapter}.${startVerse}-${endVerse}`
 }
 
-function buildHttpEndpoints(port: number): AutoScriptureEndpoint[] {
+function buildHttpEndpoints(port: number, custom: string[] = []): AutoScriptureEndpoint[] {
     const endpoints: AutoScriptureEndpoint[] = []
     const seen = new Set<string>()
 
@@ -530,7 +545,43 @@ function buildHttpEndpoints(port: number): AutoScriptureEndpoint[] {
         })
     })
 
+    custom.forEach((entry) => {
+        const normalized = normalizeCustomEndpoint(entry)
+        if (!normalized) return
+        pushEndpoint(normalized, "custom")
+    })
+
     return endpoints
+}
+
+function normalizeCustomEndpoint(value: unknown): string | null {
+    if (typeof value !== "string") return null
+
+    let normalized = value.trim()
+    if (!normalized) return null
+
+    normalized = normalized.replace(/\s/g, "")
+    if (!/^https?:\/\//i.test(normalized)) normalized = `http://${normalized}`
+
+    try {
+        const url = new URL(normalized)
+        let pathname = url.pathname || "/"
+        if (!pathname.toLowerCase().endsWith("/transcript")) {
+            pathname = pathname.replace(/\/+$/, "")
+            if (!pathname || pathname === "/") {
+                pathname = "/transcript"
+            } else {
+                if (!pathname.startsWith("/")) pathname = `/${pathname}`
+                pathname = `${pathname.replace(/\/+$/, "")}/transcript`
+            }
+        }
+        url.pathname = pathname
+        return url.toString().replace(/\/+$/, "")
+    } catch (err) {
+        let fallback = normalized.replace(/\/+$/, "")
+        if (!/\/transcript$/i.test(fallback)) fallback = `${fallback}/transcript`
+        return fallback
+    }
 }
 
 function emitStatus(): AutoScriptureStatus {

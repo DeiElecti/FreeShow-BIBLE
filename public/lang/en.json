@@ -1456,6 +1456,15 @@
         "auto_listener_time": "Time",
         "auto_listener_source": "Source",
         "auto_listener_detected_confidence": "Confidence",
+        "auto_listener_custom_endpoints": "Custom endpoints",
+        "auto_listener_custom_endpoints_hint": "Add remote or proxied URLs to share outside your network. We'll append /transcript if missing.",
+        "auto_listener_custom_endpoints_empty": "No custom endpoints added yet.",
+        "auto_listener_custom_endpoint_label": "Endpoint URL",
+        "auto_listener_custom_endpoint_placeholder": "https://example.com/auto-scripture",
+        "auto_listener_custom_endpoint_add": "Add endpoint",
+        "auto_listener_custom_endpoint_remove": "Remove endpoint",
+        "auto_listener_custom_endpoint_invalid": "Enter a valid endpoint before adding.",
+        "auto_listener_custom_endpoint_duplicate": "That endpoint is already listed.",
         "auto_listener_no_transcript": "No transcript provided"
     },
     "filter": {

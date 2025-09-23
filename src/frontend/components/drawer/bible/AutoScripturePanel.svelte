@@ -17,6 +17,7 @@
     import MaterialNumberInput from "../../inputs/MaterialNumberInput.svelte"
     import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
     import MaterialTextarea from "../../inputs/MaterialTextarea.svelte"
+    import MaterialTextInput from "../../inputs/MaterialTextInput.svelte"
     import {
         autoScriptureStatus,
         autoScriptureSuggestions,
@@ -43,6 +44,7 @@
     let manualChapter = 1
     let manualVerseStart = 1
     let manualVerseEnd = 1
+    let customEndpointValue = ""
 
     interface DisplayEndpoint {
         transcript: string
@@ -57,9 +59,16 @@
     $: status = $autoScriptureStatus
     $: suggestions = $autoScriptureSuggestions
     $: transcripts = $autoScriptureTranscripts
-    $: listenerSettings = {
-        ...DEFAULT_SERMON_LISTENER_SETTINGS,
-        ...($special?.sermonListener || {}),
+    $: {
+        const storedSettings = ($special?.sermonListener || {}) as Partial<SermonListenerSettings>
+        const customList = Array.isArray(storedSettings.customEndpoints)
+            ? [...storedSettings.customEndpoints]
+            : [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints]
+        listenerSettings = {
+            ...DEFAULT_SERMON_LISTENER_SETTINGS,
+            ...storedSettings,
+            customEndpoints: customList
+        }
     }
     $: endpointList = buildEndpointList(status, listenerSettings)
     $: primaryReferenceEndpoint = endpointList[0]?.reference || ""
@@ -204,6 +213,17 @@
             endpoints.push({ url: `http://127.0.0.1:${settings.port}/transcript`, type: "loopback" })
         }
 
+        const appendCustom = (values: string[] | undefined) => {
+            values?.forEach((entry) => {
+                const normalized = normalizeTranscriptUrl(entry)
+                if (!normalized) return
+                endpoints.push({ url: normalized, type: "custom" })
+            })
+        }
+
+        appendCustom(currentStatus?.customEndpoints)
+        appendCustom(settings.customEndpoints)
+
         return endpoints
     }
 
@@ -229,6 +249,34 @@
             default:
                 return "scripture.auto_listener_endpoint_type_loopback"
         }
+    }
+
+    function addCustomEndpoint() {
+        const normalized = normalizeTranscriptUrl(customEndpointValue)
+        if (!normalized) {
+            newToast("scripture.auto_listener_custom_endpoint_invalid")
+            return
+        }
+
+        const existing = listenerSettings.customEndpoints || []
+        const duplicate = existing.some((entry) => entry.toLowerCase() === normalized.toLowerCase())
+        const alreadyListed = endpointList.some(
+            (endpoint) => endpoint.transcript.toLowerCase() === normalized.toLowerCase()
+        )
+        if (duplicate || alreadyListed) {
+            newToast("scripture.auto_listener_custom_endpoint_duplicate")
+            return
+        }
+
+        updateSetting("customEndpoints", [...existing, normalized])
+        customEndpointValue = ""
+    }
+
+    function removeCustomEndpoint(index: number) {
+        const existing = listenerSettings.customEndpoints || []
+        if (index < 0 || index >= existing.length) return
+        const updated = existing.filter((_, i) => i !== index)
+        updateSetting("customEndpoints", updated)
     }
 
     function buildScriptureOptions(scripturesMap: Record<string, any>, dict: any) {
@@ -398,6 +446,43 @@
             checked={listenerSettings.autoDisplay}
             on:change={(e) => updateSetting("autoDisplay", e.detail)}
         />
+    </div>
+
+    <div class="custom-endpoints">
+        <div class="custom-header">
+            <h4><T id="scripture.auto_listener_custom_endpoints" /></h4>
+        </div>
+        <p class="custom-hint"><T id="scripture.auto_listener_custom_endpoints_hint" /></p>
+        {#if listenerSettings.customEndpoints.length}
+            <ul>
+                {#each listenerSettings.customEndpoints as endpoint, index (endpoint)}
+                    <li>
+                        <code>{endpoint}</code>
+                        <MaterialButton
+                            icon="delete"
+                            variant="text"
+                            title="scripture.auto_listener_custom_endpoint_remove"
+                            on:click={() => removeCustomEndpoint(index)}
+                            small
+                        />
+                    </li>
+                {/each}
+            </ul>
+        {:else}
+            <p class="empty"><T id="scripture.auto_listener_custom_endpoints_empty" /></p>
+        {/if}
+        <div class="custom-endpoint-form">
+            <MaterialTextInput
+                label="scripture.auto_listener_custom_endpoint_label"
+                placeholder={translateText("scripture.auto_listener_custom_endpoint_placeholder")}
+                value={customEndpointValue}
+                on:input={(e) => (customEndpointValue = e.detail || "")}
+                on:change={(e) => (customEndpointValue = e.detail || "")}
+            />
+            <MaterialButton icon="add" on:click={addCustomEndpoint} small>
+                <T id="scripture.auto_listener_custom_endpoint_add" />
+            </MaterialButton>
+        </div>
     </div>
 
     <div class="suggestions">
@@ -652,6 +737,65 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: 10px;
+    }
+
+    .custom-endpoints {
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .custom-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .custom-hint {
+        margin: 0;
+        font-size: 0.8em;
+        opacity: 0.75;
+    }
+
+    .custom-endpoints ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .custom-endpoints li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 6px;
+        padding: 8px 10px;
+    }
+
+    .custom-endpoints code {
+        word-break: break-all;
+        font-size: 0.85em;
+        flex: 1;
+    }
+
+    .custom-endpoint-form {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+    }
+
+    .custom-endpoint-form :global(.textfield) {
+        flex: 1;
+    }
+
+    .custom-endpoint-form :global(.material-button) {
+        align-self: stretch;
     }
 
     .suggestions {

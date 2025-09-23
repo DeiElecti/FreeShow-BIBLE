@@ -13,6 +13,8 @@ export interface SermonListenerSettings {
     maxVerses: number
     /** Optional scripture/collection identifier to use when showing references. */
     scriptureId: string
+    /** Additional hostnames or proxy URLs that should be surfaced in the UI. */
+    customEndpoints: string[]
 }
 
 export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
@@ -22,7 +24,8 @@ export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
     minConfidence: 0.55,
     duplicateInterval: 45,
     maxVerses: 8,
-    scriptureId: ""
+    scriptureId: "",
+    customEndpoints: []
 }
 
 export interface AutoScriptureReference {
@@ -69,6 +72,7 @@ export interface AutoScriptureStatus {
     lastSuggestionAt?: number
     httpEndpoint?: string
     httpEndpoints?: AutoScriptureEndpoint[]
+    customEndpoints: string[]
 }
 
 export interface AutoScriptureError {
