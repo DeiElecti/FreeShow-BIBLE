@@ -295,7 +295,8 @@ export const autoScriptureStatus: Writable<AutoScriptureStatus> = writable({
     transcriberReady: false,
     transcriberMessage: undefined,
     transcriberSampleRate: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate,
-    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
+    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial,
+    transcriberAlternatives: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.maxAlternatives
 })
 export const autoScriptureSuggestions: Writable<AutoScriptureSuggestion[]> = writable([])
 export const autoScriptureTranscripts: Writable<AutoScriptureTranscriptEvent[]> = writable([])

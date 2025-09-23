@@ -53,6 +53,7 @@
         reference: string
         status: string
         events: string
+        settings: string
         type: AutoScriptureEndpointType
     }
 
@@ -61,6 +62,7 @@
     let primaryReferenceEndpoint = ""
     let primaryStatusEndpoint = ""
     let primaryEventsEndpoint = ""
+    let primarySettingsEndpoint = ""
     let listenerSettings: SermonListenerSettings = { ...DEFAULT_SERMON_LISTENER_SETTINGS }
     let transcriberSettings: SermonTranscriberSettings = { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
     let transcriberEngineOptions: { value: string; label: string }[] = []
@@ -91,6 +93,7 @@
     $: primaryReferenceEndpoint = endpointList[0]?.reference || ""
     $: primaryStatusEndpoint = endpointList[0]?.status || ""
     $: primaryEventsEndpoint = endpointList[0]?.events || ""
+    $: primarySettingsEndpoint = endpointList[0]?.settings || ""
     $: scriptureOptions = buildScriptureOptions($scriptures, $dictionary)
     $: scriptureTargetLabel = listenerSettings.scriptureId
         ? getScriptureName(listenerSettings.scriptureId)
@@ -245,11 +248,13 @@
             const reference = normalizeEndpointVariant(endpoint.reference, transcript, "/reference")
             const statusUrl = normalizeEndpointVariant(endpoint.status, transcript, "/status")
             const eventsUrl = normalizeEndpointVariant(endpoint.events, transcript, "/events")
+            const settingsUrl = normalizeEndpointVariant(endpoint.settings, transcript, "/settings")
             collected.push({
                 transcript,
                 reference,
                 status: statusUrl,
                 events: eventsUrl,
+                settings: settingsUrl,
                 type: endpoint.type ?? "loopback"
             })
         })
@@ -484,6 +489,24 @@
                         small
                     />
                 </div>
+                <div class="endpoint" class:inactive={!status.listening}>
+                    <div class="endpoint-info">
+                        <span class="endpoint-label">
+                            <T id="scripture.auto_listener_endpoint_settings" />
+                            <span class="endpoint-type">
+                                <T id={getEndpointTypeLabel(endpoint.type)} />
+                            </span>
+                        </span>
+                        <code>{endpoint.settings}</code>
+                    </div>
+                    <MaterialButton
+                        icon="content_copy"
+                        variant="text"
+                        title="scripture.auto_listener_copy"
+                        on:click={() => copyValue(endpoint.settings)}
+                        small
+                    />
+                </div>
             {/each}
         </div>
         <p class="endpoint-help">
@@ -502,6 +525,11 @@
         {#if primaryEventsEndpoint}
             <p class="endpoint-help">
                 <T id="scripture.auto_listener_events_help" replace={[primaryEventsEndpoint]} />
+            </p>
+        {/if}
+        {#if primarySettingsEndpoint}
+            <p class="endpoint-help">
+                <T id="scripture.auto_listener_settings_help" replace={[primarySettingsEndpoint]} />
             </p>
         {/if}
     {/if}

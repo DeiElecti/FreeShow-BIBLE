@@ -36,6 +36,8 @@ export interface SermonListenerSettings {
     transcriber: SermonTranscriberSettings
 }
 
+export type AutoScriptureSettingsUpdate = Partial<SermonListenerSettings>
+
 export const DEFAULT_SERMON_TRANSCRIBER_SETTINGS: SermonTranscriberSettings = {
     engine: "disabled",
     modelPath: "",
@@ -108,6 +110,7 @@ export interface AutoScriptureStatus {
     transcriberMessage?: string
     transcriberSampleRate: number
     transcriberPartial: boolean
+    transcriberAlternatives: number
 }
 
 export interface AutoScriptureError {
@@ -129,6 +132,7 @@ export interface AutoScriptureEndpoint {
     reference?: string
     status?: string
     events?: string
+    settings?: string
 }
 
 export type AutoScriptureCommand =
@@ -150,6 +154,10 @@ export type AutoScriptureCommand =
           source?: string
           timestamp?: number
           transcript?: string
+      }
+    | {
+          action: "UPDATE_SETTINGS"
+          settings: AutoScriptureSettingsUpdate
       }
 
 export interface AutoScriptureExternalReference {

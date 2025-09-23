@@ -13,13 +13,16 @@ import {
     type AutoScriptureEndpoint,
     type AutoScriptureTranscriptEvent,
     type AutoScriptureStatusReport,
+    type AutoScriptureSettingsUpdate,
     type SermonTranscriberSettings,
     type SermonListenerSettings,
     formatScriptureReference,
     getBookMeta
 } from "../../shared/autoScripture"
 import { SCRIPTURE_AUTO } from "../../types/Channels"
+import { Main } from "../../types/IPC/Main"
 import { stores } from "../data/store"
+import { sendMain } from "../IPC/main"
 import { toApp } from "../index"
 import { extractReferences, hasReferenceParser } from "./scriptureReference"
 import {
@@ -55,7 +58,8 @@ let status: AutoScriptureStatus = {
     transcriberReady: false,
     transcriberMessage: undefined,
     transcriberSampleRate: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate,
-    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
+    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial,
+    transcriberAlternatives: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.maxAlternatives
 }
 
 let httpServer: http.Server | null = null
@@ -118,6 +122,9 @@ export function handleAutoScriptureCommand(command: AutoScriptureCommand): AutoS
                 timestamp: command.timestamp,
                 transcript: command.transcript
             })
+            return emitStatus()
+        case "UPDATE_SETTINGS":
+            updateListenerSettings(command.settings)
             return emitStatus()
         case "RESET_HISTORY":
             seenReferences.clear()
@@ -189,6 +196,8 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.transcriberEngine = settings.transcriber?.engine ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine
     status.transcriberSampleRate = settings.transcriber?.sampleRate ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate
     status.transcriberPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
+    status.transcriberAlternatives =
+        settings.transcriber?.maxAlternatives ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.maxAlternatives
 
     if (settings.contextWindow <= 0) {
         clearTranscriptContext()
@@ -292,6 +301,25 @@ function startServer() {
 
     expressApp.get("/status", (_req: Request, res: Response) => {
         res.json(buildStatusReport())
+    })
+
+    expressApp.get("/settings", (_req: Request, res: Response) => {
+        res.json({ settings: cloneListenerSettings(settings) })
+    })
+
+    expressApp.patch("/settings", (req: Request, res: Response) => {
+        const payload = req.body
+        if (!payload || typeof payload !== "object") {
+            res.status(400).json({ error: "Invalid settings payload" })
+            return
+        }
+
+        const updated = updateListenerSettings(payload as AutoScriptureSettingsUpdate)
+        res.json({
+            status: "updated",
+            settings: cloneListenerSettings(updated),
+            listener: serializeStatus(status)
+        })
     })
 
     expressApp.get("/events", (req: Request, res: Response) => {
@@ -647,8 +675,9 @@ function buildHttpEndpoints(port: number, custom: string[] = []): AutoScriptureE
         const reference = normalized.replace(/\/transcript$/i, "/reference")
         const statusUrl = normalized.replace(/\/transcript$/i, "/status")
         const events = normalized.replace(/\/transcript$/i, "/events")
+        const settingsUrl = normalized.replace(/\/transcript$/i, "/settings")
 
-        endpoints.push({ url: normalized, type, reference, status: statusUrl, events })
+        endpoints.push({ url: normalized, type, reference, status: statusUrl, events, settings: settingsUrl })
     }
 
     pushEndpoint(`http://127.0.0.1:${port}/transcript`, "loopback")
@@ -909,6 +938,8 @@ function handleTranscriberStatus(update: TranscriberStatusUpdate) {
     status.transcriberMessage = update.message
     status.transcriberSampleRate = update.sampleRate
     status.transcriberPartial = update.partial
+    status.transcriberAlternatives =
+        settings.transcriber?.maxAlternatives ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.maxAlternatives
     emitStatus()
 }
 
@@ -969,6 +1000,181 @@ function sanitizeTranscriberSettings(raw: unknown): SermonTranscriberSettings {
         sampleRate,
         enablePartial,
         maxAlternatives
+    }
+}
+
+function updateListenerSettings(partial: AutoScriptureSettingsUpdate | undefined): SermonListenerSettings {
+    if (!partial || typeof partial !== "object") return cloneListenerSettings(settings)
+
+    const merged = mergeListenerSettings(partial)
+    persistListenerSettings(merged)
+    applySettings(merged)
+    return merged
+}
+
+function mergeListenerSettings(update: AutoScriptureSettingsUpdate): SermonListenerSettings {
+    const base: SermonListenerSettings = {
+        ...settings,
+        customEndpoints: [...settings.customEndpoints],
+        transcriber: { ...settings.transcriber }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "enabled")) {
+        base.enabled = sanitizeBoolean((update as any).enabled, base.enabled)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "autoDisplay")) {
+        base.autoDisplay = sanitizeBoolean((update as any).autoDisplay, base.autoDisplay)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "port")) {
+        base.port = sanitizePortValue((update as any).port, base.port)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "minConfidence")) {
+        base.minConfidence = sanitizeConfidenceValue((update as any).minConfidence, base.minConfidence)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "duplicateInterval")) {
+        base.duplicateInterval = sanitizeDuplicateIntervalValue((update as any).duplicateInterval, base.duplicateInterval)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "maxVerses")) {
+        base.maxVerses = sanitizeMaxVersesValue((update as any).maxVerses, base.maxVerses)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "scriptureId")) {
+        base.scriptureId = sanitizeScriptureIdValue((update as any).scriptureId, base.scriptureId)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "contextWindow")) {
+        base.contextWindow = sanitizeContextWindowValue((update as any).contextWindow, base.contextWindow)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "customEndpoints")) {
+        base.customEndpoints = sanitizeCustomEndpointUpdate((update as any).customEndpoints, base.customEndpoints)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "transcriber")) {
+        const mergedTranscriber = {
+            ...base.transcriber,
+            ...(((update as any).transcriber || {}) as Partial<SermonTranscriberSettings>)
+        }
+        base.transcriber = sanitizeTranscriberSettings(mergedTranscriber)
+    } else {
+        base.transcriber = sanitizeTranscriberSettings(base.transcriber)
+    }
+
+    return base
+}
+
+function sanitizeBoolean(value: unknown, fallback: boolean) {
+    if (typeof value === "boolean") return value
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase()
+        if (normalized === "true" || normalized === "1") return true
+        if (normalized === "false" || normalized === "0") return false
+    }
+    if (typeof value === "number") return value !== 0
+    return fallback
+}
+
+function sanitizePortValue(value: unknown, fallback: number) {
+    const numeric = sanitizeNumber(value)
+    if (typeof numeric !== "number") return fallback
+    const port = Math.floor(numeric)
+    if (!Number.isFinite(port) || port <= 0 || port > 65535) return fallback
+    return port
+}
+
+function sanitizeConfidenceValue(value: unknown, fallback: number) {
+    const numeric = sanitizeNumber(value)
+    if (typeof numeric !== "number") return fallback
+    const clamped = Math.min(Math.max(numeric, 0), 1)
+    if (Number.isNaN(clamped)) return fallback
+    return clamped
+}
+
+function sanitizeDuplicateIntervalValue(value: unknown, fallback: number) {
+    const numeric = sanitizeNumber(value)
+    if (typeof numeric !== "number") return fallback
+    const interval = Math.max(1, Math.floor(numeric))
+    return Number.isFinite(interval) ? interval : fallback
+}
+
+function sanitizeMaxVersesValue(value: unknown, fallback: number) {
+    const numeric = sanitizeNumber(value)
+    if (typeof numeric !== "number") return fallback
+    const verses = Math.max(1, Math.floor(numeric))
+    return Number.isFinite(verses) ? verses : fallback
+}
+
+function sanitizeContextWindowValue(value: unknown, fallback: number) {
+    const numeric = sanitizeNumber(value)
+    if (typeof numeric !== "number") return fallback
+    const windowSeconds = Math.max(0, Math.min(120, Math.floor(numeric)))
+    return Number.isFinite(windowSeconds) ? windowSeconds : fallback
+}
+
+function sanitizeScriptureIdValue(value: unknown, fallback: string) {
+    if (typeof value === "string") return value.trim()
+    if (value === null) return ""
+    return fallback
+}
+
+function sanitizeCustomEndpointUpdate(value: unknown, base: string[]): string[] {
+    if (Array.isArray(value)) return uniqueNormalizedEndpoints(value)
+    if (typeof value === "string") return uniqueNormalizedEndpoints([value])
+    if (!value || typeof value !== "object") return uniqueNormalizedEndpoints(base)
+
+    let next = uniqueNormalizedEndpoints(base)
+    const additions = extractEndpointList((value as any).add)
+    if (additions.length) next = uniqueNormalizedEndpoints([...next, ...additions])
+
+    const removals = extractEndpointList((value as any).remove)
+    if (removals.length) {
+        const removeKeys = new Set(removals.map((entry) => entry.toLowerCase()))
+        next = next.filter((entry) => !removeKeys.has(entry.toLowerCase()))
+    }
+
+    return next
+}
+
+function extractEndpointList(value: unknown): string[] {
+    if (Array.isArray(value)) return uniqueNormalizedEndpoints(value)
+    if (typeof value === "string") return uniqueNormalizedEndpoints([value])
+    return []
+}
+
+function uniqueNormalizedEndpoints(values: unknown[]): string[] {
+    const seen = new Set<string>()
+    const result: string[] = []
+
+    values.forEach((entry) => {
+        const normalized = normalizeCustomEndpoint(entry)
+        if (!normalized) return
+        const key = normalized.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        result.push(normalized)
+    })
+
+    return result
+}
+
+function persistListenerSettings(data: SermonListenerSettings) {
+    const special = stores.SETTINGS.get("special") || {}
+    const listenerSettingsPayload = cloneListenerSettings(data)
+    const payload = { ...special, sermonListener: listenerSettingsPayload }
+    stores.SETTINGS.set("special", payload)
+    sendMain(Main.SETTINGS, { special: payload })
+}
+
+function cloneListenerSettings(data: SermonListenerSettings): SermonListenerSettings {
+    return {
+        ...data,
+        customEndpoints: [...data.customEndpoints],
+        transcriber: { ...data.transcriber }
     }
 }
 
