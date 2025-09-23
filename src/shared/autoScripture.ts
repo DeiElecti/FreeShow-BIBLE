@@ -32,6 +32,8 @@ export interface SermonListenerSettings {
     contextWindow: number
     /** Additional hostnames or proxy URLs that should be surfaced in the UI. */
     customEndpoints: string[]
+    /** Cross-origin domains that may access the HTTP API from a browser. */
+    corsOrigins: string[]
     /** Shared secrets that must be provided when calling ingestion endpoints. */
     authTokens: string[]
     /** Configuration for the built-in speech-recognition engine. */
@@ -58,6 +60,7 @@ export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
     scriptureId: "",
     contextWindow: 12,
     customEndpoints: [],
+    corsOrigins: [],
     authTokens: [],
     transcriber: { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
 }
@@ -110,6 +113,8 @@ export interface AutoScriptureStatus {
     customEndpoints: string[]
     contextWindow: number
     authRequired: boolean
+    corsEnabled: boolean
+    corsOrigins: string[]
     transcriberEngine: SermonTranscriberEngine
     transcriberReady: boolean
     transcriberMessage?: string

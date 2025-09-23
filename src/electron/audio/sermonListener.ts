@@ -42,6 +42,7 @@ interface TranscriptPayload {
 let settings: SermonListenerSettings = {
     ...DEFAULT_SERMON_LISTENER_SETTINGS,
     customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
+    corsOrigins: [...DEFAULT_SERMON_LISTENER_SETTINGS.corsOrigins],
     authTokens: [...DEFAULT_SERMON_LISTENER_SETTINGS.authTokens],
     transcriber: { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
 }
@@ -61,6 +62,8 @@ let status: AutoScriptureStatus = {
     customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
     contextWindow: DEFAULT_SERMON_LISTENER_SETTINGS.contextWindow,
     authRequired: false,
+    corsEnabled: false,
+    corsOrigins: [...DEFAULT_SERMON_LISTENER_SETTINGS.corsOrigins],
     transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
     transcriberReady: false,
     transcriberMessage: undefined,
@@ -176,6 +179,8 @@ function readSettings(): SermonListenerSettings {
           )
         : []
 
+    const corsOrigins = sanitizeCorsOrigins((stored as any)?.corsOrigins)
+
     const authTokens = normalizeAuthTokens((stored as any)?.authTokens)
     const transcriber = sanitizeTranscriberSettings((stored as any)?.transcriber)
 
@@ -194,6 +199,7 @@ function readSettings(): SermonListenerSettings {
         scriptureId: stored.scriptureId ?? DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
         contextWindow,
         customEndpoints,
+        corsOrigins,
         authTokens,
         transcriber
     }
@@ -217,6 +223,8 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.customEndpoints = [...settings.customEndpoints]
     status.contextWindow = settings.contextWindow
     status.authRequired = hasAuthTokens()
+    status.corsOrigins = [...settings.corsOrigins]
+    status.corsEnabled = status.corsOrigins.length > 0
     status.transcriberEngine = settings.transcriber?.engine ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine
     status.transcriberSampleRate = settings.transcriber?.sampleRate ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate
     status.transcriberPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
@@ -234,6 +242,8 @@ function applySettings(newSettings: SermonListenerSettings) {
         status.transcriberReady = false
         ensureTranscriber()?.setActive(false)
         scheduleTranscriberUpdate()
+        status.corsOrigins = [...settings.corsOrigins]
+        status.corsEnabled = status.corsOrigins.length > 0
         stopServer()
         emitStatus()
         return
@@ -257,6 +267,20 @@ function startServer() {
 
     expressApp = express()
     expressApp.disable("x-powered-by")
+    expressApp.use((req: Request, res: Response, next) => {
+        if (!settings.corsOrigins.length) {
+            next()
+            return
+        }
+
+        applyCorsHeaders(req, res)
+        if (req.method?.toUpperCase() === "OPTIONS") {
+            res.status(204).end()
+            return
+        }
+
+        next()
+    })
     expressApp.use(express.json({ limit: "1mb" }))
 
     expressApp.post("/transcript", (req: Request, res: Response) => {
@@ -439,6 +463,8 @@ function stopServer() {
     status.httpEndpoints = []
     status.customEndpoints = [...settings.customEndpoints]
     status.authRequired = hasAuthTokens()
+    status.corsOrigins = [...settings.corsOrigins]
+    status.corsEnabled = status.corsOrigins.length > 0
     ensureTranscriber()?.setActive(false)
     clearTranscriptContext()
 }
@@ -826,6 +852,25 @@ function normalizeCustomEndpoint(value: unknown): string | null {
     }
 }
 
+function normalizeCorsOrigin(value: unknown): string | null {
+    if (typeof value !== "string") return null
+
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (trimmed === "*") return "*"
+
+    const ensureProtocol = (origin: string) =>
+        /^[a-z]+:\/\//i.test(origin) ? origin : `http://${origin}`
+
+    try {
+        const url = new URL(ensureProtocol(trimmed))
+        if (!url.protocol || !url.hostname) return null
+        return url.origin
+    } catch (err) {
+        return null
+    }
+}
+
 function emitStatus(): AutoScriptureStatus {
     const payload = serializeStatus(status)
     toApp(SCRIPTURE_AUTO, { channel: "STATUS", data: payload })
@@ -1000,6 +1045,7 @@ function serializeStatus(current: AutoScriptureStatus): AutoScriptureStatus {
     return {
         ...current,
         customEndpoints: [...current.customEndpoints],
+        corsOrigins: [...current.corsOrigins],
         httpEndpoints
     }
 }
@@ -1115,6 +1161,7 @@ function mergeListenerSettings(update: AutoScriptureSettingsUpdate): SermonListe
     const base: SermonListenerSettings = {
         ...settings,
         customEndpoints: [...settings.customEndpoints],
+        corsOrigins: [...settings.corsOrigins],
         authTokens: [...settings.authTokens],
         transcriber: { ...settings.transcriber }
     }
@@ -1153,6 +1200,10 @@ function mergeListenerSettings(update: AutoScriptureSettingsUpdate): SermonListe
 
     if (Object.prototype.hasOwnProperty.call(update, "customEndpoints")) {
         base.customEndpoints = sanitizeCustomEndpointUpdate((update as any).customEndpoints, base.customEndpoints)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(update, "corsOrigins")) {
+        base.corsOrigins = sanitizeCorsOriginsUpdate((update as any).corsOrigins, base.corsOrigins)
     }
 
     if (Object.prototype.hasOwnProperty.call(update, "authTokens")) {
@@ -1266,6 +1317,54 @@ function uniqueNormalizedEndpoints(values: unknown[]): string[] {
     return result
 }
 
+function sanitizeCorsOrigins(value: unknown): string[] {
+    if (Array.isArray(value)) return uniqueCorsOrigins(value)
+    if (typeof value === "string") return uniqueCorsOrigins([value])
+    if (!value || typeof value !== "object") return []
+    if (Array.isArray((value as any).origins)) return uniqueCorsOrigins((value as any).origins)
+    return []
+}
+
+function sanitizeCorsOriginsUpdate(value: unknown, base: string[]): string[] {
+    if (Array.isArray(value)) return uniqueCorsOrigins(value)
+    if (typeof value === "string") return uniqueCorsOrigins([value])
+    if (!value || typeof value !== "object") return uniqueCorsOrigins(base)
+
+    let next = uniqueCorsOrigins(base)
+    const additions = extractCorsOriginList((value as any).add)
+    if (additions.length) next = uniqueCorsOrigins([...next, ...additions])
+
+    const removals = extractCorsOriginList((value as any).remove)
+    if (removals.length) {
+        const removeKeys = new Set(removals.map((origin) => origin.toLowerCase()))
+        next = next.filter((origin) => !removeKeys.has(origin.toLowerCase()))
+    }
+
+    return next
+}
+
+function extractCorsOriginList(value: unknown): string[] {
+    if (Array.isArray(value)) return uniqueCorsOrigins(value)
+    if (typeof value === "string") return uniqueCorsOrigins([value])
+    return []
+}
+
+function uniqueCorsOrigins(values: unknown[]): string[] {
+    const seen = new Set<string>()
+    const origins: string[] = []
+
+    values.forEach((entry) => {
+        const normalized = normalizeCorsOrigin(entry)
+        if (!normalized) return
+        const key = normalized === "*" ? "*" : normalized.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        origins.push(normalized)
+    })
+
+    return origins
+}
+
 function normalizeAuthTokens(value: unknown): string[] {
     if (Array.isArray(value)) return uniqueAuthTokens(value)
     if (typeof value === "string") return uniqueAuthTokens([value])
@@ -1321,6 +1420,62 @@ function updateAuthTokenSet(tokens: string[]) {
 
 function hasAuthTokens(): boolean {
     return authTokenSet.size > 0
+}
+
+function applyCorsHeaders(req: Request, res: Response) {
+    const origins = settings.corsOrigins || []
+    if (!origins.length) return
+
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key")
+    res.setHeader("Access-Control-Max-Age", "600")
+
+    if (origins.includes("*")) {
+        res.setHeader("Access-Control-Allow-Origin", "*")
+        return
+    }
+
+    const origin = resolveRequestOrigin(req)
+    appendVaryHeader(res, "Origin")
+    if (origin && isOriginAllowed(origin, origins)) {
+        res.setHeader("Access-Control-Allow-Origin", origin)
+        res.setHeader("Access-Control-Allow-Credentials", "true")
+    }
+}
+
+function resolveRequestOrigin(req: Request): string | undefined {
+    const header = req.headers.origin
+    if (Array.isArray(header)) {
+        for (const entry of header) {
+            if (typeof entry === "string" && entry.trim()) return entry.trim()
+        }
+    } else if (typeof header === "string" && header.trim()) {
+        return header.trim()
+    }
+    return undefined
+}
+
+function appendVaryHeader(res: Response, value: string) {
+    const header = res.getHeader("Vary")
+    if (!header) {
+        res.setHeader("Vary", value)
+        return
+    }
+
+    const current = Array.isArray(header) ? header.join(", ") : String(header)
+    const values = current
+        .split(/,\s*/)
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean)
+
+    if (values.includes(value.toLowerCase())) return
+
+    res.setHeader("Vary", `${current}, ${value}`)
+}
+
+function isOriginAllowed(origin: string, allowed: string[]): boolean {
+    const normalized = origin.trim().toLowerCase()
+    return allowed.some((entry) => entry === "*" || entry.toLowerCase() === normalized)
 }
 
 function parseAuthorizationHeader(value: string | undefined): string | undefined {
@@ -1392,6 +1547,7 @@ function cloneListenerSettings(data: SermonListenerSettings): SermonListenerSett
     return {
         ...data,
         customEndpoints: [...data.customEndpoints],
+        corsOrigins: [...data.corsOrigins],
         authTokens: [...data.authTokens],
         transcriber: { ...data.transcriber }
     }

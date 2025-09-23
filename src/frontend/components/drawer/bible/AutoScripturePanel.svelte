@@ -48,6 +48,7 @@
     let manualVerseEnd = 1
     let customEndpointValue = ""
     let authTokenValue = ""
+    let corsOriginValue = ""
 
     interface DisplayEndpoint {
         transcript: string
@@ -82,11 +83,15 @@
         const customList = Array.isArray(storedSettings.customEndpoints)
             ? [...storedSettings.customEndpoints]
             : [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints]
+        const corsList = Array.isArray(storedSettings.corsOrigins)
+            ? [...storedSettings.corsOrigins]
+            : [...DEFAULT_SERMON_LISTENER_SETTINGS.corsOrigins]
         const tokenList = sanitizeAuthTokens(storedSettings.authTokens)
         listenerSettings = {
             ...DEFAULT_SERMON_LISTENER_SETTINGS,
             ...storedSettings,
             customEndpoints: customList,
+            corsOrigins: corsList,
             authTokens: tokenList,
             transcriber: {
                 ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
@@ -123,6 +128,10 @@
         autoScriptureStatus.update((current) => {
             if (key === "authTokens") {
                 return { ...current, authRequired: Array.isArray(value) ? value.length > 0 : current.authRequired }
+            }
+            if (key === "corsOrigins") {
+                const list = Array.isArray(value) ? value : []
+                return { ...current, corsOrigins: list, corsEnabled: list.length > 0 }
             }
             if (key in current) {
                 return { ...current, [key]: value }
@@ -388,6 +397,55 @@
         if (index < 0 || index >= existing.length) return
         const updated = existing.filter((_, i) => i !== index)
         updateSetting("customEndpoints", updated)
+    }
+
+    function normalizeCorsOriginInput(value: string): string {
+        if (!value) return ""
+        let normalized = value.trim()
+        if (!normalized) return ""
+        if (normalized === "*") return "*"
+        if (!/^[a-z]+:\/\//i.test(normalized)) {
+            normalized = `http://${normalized}`
+        }
+        try {
+            const url = new URL(normalized)
+            return url.origin
+        } catch (err) {
+            return ""
+        }
+    }
+
+    function addCorsOrigin() {
+        const normalized = normalizeCorsOriginInput(corsOriginValue)
+        if (!normalized) {
+            newToast("scripture.auto_listener_cors_origin_invalid")
+            return
+        }
+
+        const existing = listenerSettings.corsOrigins || []
+        const key = normalized === "*" ? "*" : normalized.toLowerCase()
+        const duplicate = existing.some((origin) => (origin === "*" ? "*" : origin.toLowerCase()) === key)
+        if (duplicate) {
+            newToast("scripture.auto_listener_cors_origin_duplicate")
+            return
+        }
+
+        updateSetting("corsOrigins", [...existing, normalized])
+        corsOriginValue = ""
+    }
+
+    function removeCorsOrigin(index: number) {
+        const existing = listenerSettings.corsOrigins || []
+        if (index < 0 || index >= existing.length) return
+        const updated = existing.filter((_, i) => i !== index)
+        updateSetting("corsOrigins", updated)
+    }
+
+    function formatCorsOrigin(origin: string) {
+        if (origin === "*") {
+            return translateText("scripture.auto_listener_cors_origin_wildcard") || "*"
+        }
+        return origin
     }
 
     function addAuthToken() {
@@ -843,6 +901,52 @@
         </div>
     </div>
 
+    <div class="cors">
+        <div class="cors-header">
+            <h4><T id="scripture.auto_listener_cors" /></h4>
+            <span class="cors-status" class:enabled={status.corsEnabled}>
+                <T
+                    id={
+                        status.corsEnabled
+                            ? "scripture.auto_listener_cors_enabled"
+                            : "scripture.auto_listener_cors_disabled"
+                    }
+                />
+            </span>
+        </div>
+        <p class="cors-hint"><T id="scripture.auto_listener_cors_hint" /></p>
+        {#if listenerSettings.corsOrigins.length}
+            <ul>
+                {#each listenerSettings.corsOrigins as origin, index (origin)}
+                    <li>
+                        <code>{formatCorsOrigin(origin)}</code>
+                        <MaterialButton
+                            icon="delete"
+                            variant="text"
+                            title="scripture.auto_listener_cors_origin_remove"
+                            on:click={() => removeCorsOrigin(index)}
+                            small
+                        />
+                    </li>
+                {/each}
+            </ul>
+        {:else}
+            <p class="empty"><T id="scripture.auto_listener_cors_empty" /></p>
+        {/if}
+        <div class="cors-form">
+            <MaterialTextInput
+                label="scripture.auto_listener_cors_origin_label"
+                placeholder={translateText("scripture.auto_listener_cors_origin_placeholder")}
+                value={corsOriginValue}
+                on:input={(e) => (corsOriginValue = e.detail || "")}
+                on:change={(e) => (corsOriginValue = e.detail || "")}
+            />
+            <MaterialButton icon="add" on:click={addCorsOrigin} small>
+                <T id="scripture.auto_listener_cors_origin_add" />
+            </MaterialButton>
+        </div>
+    </div>
+
     <div class="auth">
         <div class="auth-header">
             <h4><T id="scripture.auto_listener_auth" /></h4>
@@ -1272,6 +1376,71 @@
 
     .custom-endpoint-form :global(.material-button) {
         align-self: stretch;
+    }
+
+    .cors {
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .cors-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .cors-status {
+        font-size: 0.75em;
+        opacity: 0.7;
+    }
+
+    .cors-status.enabled {
+        color: #9ed69e;
+        opacity: 1;
+    }
+
+    .cors-hint {
+        margin: 0;
+        font-size: 0.75em;
+        opacity: 0.7;
+    }
+
+    .cors ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .cors li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 0.85em;
+    }
+
+    .cors code {
+        background: rgba(0, 0, 0, 0.25);
+        padding: 4px 6px;
+        border-radius: 4px;
+        font-family: monospace;
+    }
+
+    .cors-form {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+    }
+
+    .cors-form :global(.textfield) {
+        flex: 1;
     }
 
     .auth {
