@@ -4,6 +4,9 @@
         BIBLE_BOOK_META,
         DEFAULT_SERMON_LISTENER_SETTINGS,
         getBookMeta,
+        type AutoScriptureEndpoint,
+        type AutoScriptureEndpointType,
+        type AutoScriptureStatus,
         type SermonListenerSettings
     } from "../../../../shared/autoScripture"
     import { Main } from "../../../../types/IPC/Main"
@@ -41,6 +44,16 @@
     let manualVerseStart = 1
     let manualVerseEnd = 1
 
+    interface DisplayEndpoint {
+        transcript: string
+        reference: string
+        type: AutoScriptureEndpointType
+    }
+
+    let status: AutoScriptureStatus
+    let endpointList: DisplayEndpoint[] = []
+    let primaryReferenceEndpoint = ""
+
     $: status = $autoScriptureStatus
     $: suggestions = $autoScriptureSuggestions
     $: transcripts = $autoScriptureTranscripts
@@ -48,14 +61,8 @@
         ...DEFAULT_SERMON_LISTENER_SETTINGS,
         ...($special?.sermonListener || {}),
     }
-    $: endpoint =
-        status?.httpEndpoint ||
-        (listenerSettings.enabled ? `http://127.0.0.1:${listenerSettings.port}/transcript` : "")
-    $: referenceEndpoint = endpoint
-        ? endpoint.replace(/\/?transcript$/, "/reference")
-        : listenerSettings.enabled
-        ? `http://127.0.0.1:${listenerSettings.port}/reference`
-        : ""
+    $: endpointList = buildEndpointList(status, listenerSettings)
+    $: primaryReferenceEndpoint = endpointList[0]?.reference || ""
     $: scriptureOptions = buildScriptureOptions($scriptures, $dictionary)
     $: scriptureTargetLabel = listenerSettings.scriptureId
         ? getScriptureName(listenerSettings.scriptureId)
@@ -158,6 +165,72 @@
             .join(" ")
     }
 
+    function buildEndpointList(
+        currentStatus: AutoScriptureStatus | undefined,
+        settings: SermonListenerSettings
+    ): DisplayEndpoint[] {
+        const collected: DisplayEndpoint[] = []
+        const seen = new Set<string>()
+        const endpoints = collectEndpoints(currentStatus, settings)
+
+        endpoints.forEach((endpoint) => {
+            const transcript = normalizeTranscriptUrl(endpoint.url)
+            if (!transcript || seen.has(transcript)) return
+            seen.add(transcript)
+
+            collected.push({
+                transcript,
+                reference: transcript.replace(/\/transcript$/i, "/reference"),
+                type: endpoint.type ?? "loopback"
+            })
+        })
+
+        return collected
+    }
+
+    function collectEndpoints(
+        currentStatus: AutoScriptureStatus | undefined,
+        settings: SermonListenerSettings
+    ): AutoScriptureEndpoint[] {
+        const endpoints: AutoScriptureEndpoint[] = []
+        if (currentStatus?.httpEndpoints?.length) {
+            currentStatus.httpEndpoints.forEach((entry) => {
+                if (!entry?.url) return
+                endpoints.push(entry)
+            })
+        } else if (currentStatus?.httpEndpoint) {
+            endpoints.push({ url: currentStatus.httpEndpoint, type: "loopback" })
+        } else if (settings.enabled) {
+            endpoints.push({ url: `http://127.0.0.1:${settings.port}/transcript`, type: "loopback" })
+        }
+
+        return endpoints
+    }
+
+    function normalizeTranscriptUrl(url: string): string {
+        if (!url) return ""
+        let normalized = url.trim()
+        if (!normalized) return ""
+        if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+            normalized = `http://${normalized}`
+        }
+        normalized = normalized.replace(/\s/g, "")
+        normalized = normalized.replace(/\/+$/, "")
+        if (!/\/transcript$/i.test(normalized)) normalized = `${normalized}/transcript`
+        return normalized
+    }
+
+    function getEndpointTypeLabel(type?: AutoScriptureEndpointType) {
+        switch (type) {
+            case "lan":
+                return "scripture.auto_listener_endpoint_type_lan"
+            case "custom":
+                return "scripture.auto_listener_endpoint_type_custom"
+            default:
+                return "scripture.auto_listener_endpoint_type_loopback"
+        }
+    }
+
     function buildScriptureOptions(scripturesMap: Record<string, any>, dict: any) {
         const seen = new Set<string>()
         const options: { label: string; value: string; favorite?: boolean }[] = []
@@ -211,43 +284,53 @@
     <p class="status">
         <T id={getStatusLabel()} replace={[listenerSettings.port.toString()]} />
     </p>
-    {#if endpoint}
+    {#if endpointList.length}
         <div class="endpoints">
-            <div class="endpoint" class:inactive={!status.listening}>
-                <div class="endpoint-info">
-                    <span class="endpoint-label"><T id="scripture.auto_listener_endpoint_transcript" /></span>
-                    <code>{endpoint}</code>
-                </div>
-                <MaterialButton
-                    icon="content_copy"
-                    variant="text"
-                    title="scripture.auto_listener_copy"
-                    on:click={() => copyValue(endpoint)}
-                    small
-                />
-            </div>
-            {#if referenceEndpoint}
+            {#each endpointList as endpoint (endpoint.transcript)}
                 <div class="endpoint" class:inactive={!status.listening}>
                     <div class="endpoint-info">
-                        <span class="endpoint-label"><T id="scripture.auto_listener_endpoint_reference" /></span>
-                        <code>{referenceEndpoint}</code>
+                        <span class="endpoint-label">
+                            <T id="scripture.auto_listener_endpoint_transcript" />
+                            <span class="endpoint-type">
+                                <T id={getEndpointTypeLabel(endpoint.type)} />
+                            </span>
+                        </span>
+                        <code>{endpoint.transcript}</code>
                     </div>
                     <MaterialButton
                         icon="content_copy"
                         variant="text"
                         title="scripture.auto_listener_copy"
-                        on:click={() => copyValue(referenceEndpoint)}
+                        on:click={() => copyValue(endpoint.transcript)}
                         small
                     />
                 </div>
-            {/if}
+                <div class="endpoint" class:inactive={!status.listening}>
+                    <div class="endpoint-info">
+                        <span class="endpoint-label">
+                            <T id="scripture.auto_listener_endpoint_reference" />
+                            <span class="endpoint-type">
+                                <T id={getEndpointTypeLabel(endpoint.type)} />
+                            </span>
+                        </span>
+                        <code>{endpoint.reference}</code>
+                    </div>
+                    <MaterialButton
+                        icon="content_copy"
+                        variant="text"
+                        title="scripture.auto_listener_copy"
+                        on:click={() => copyValue(endpoint.reference)}
+                        small
+                    />
+                </div>
+            {/each}
         </div>
         <p class="endpoint-help">
             <T id="scripture.auto_listener_endpoint_help" />
         </p>
-        {#if referenceEndpoint}
+        {#if primaryReferenceEndpoint}
             <p class="endpoint-help">
-                <T id="scripture.auto_listener_reference_help" replace={[referenceEndpoint]} />
+                <T id="scripture.auto_listener_reference_help" replace={[primaryReferenceEndpoint]} />
             </p>
         {/if}
     {/if}
@@ -524,6 +607,12 @@
     .endpoint-label {
         font-size: 0.75em;
         opacity: 0.7;
+    }
+
+    .endpoint-type {
+        margin-left: 6px;
+        font-weight: 400;
+        opacity: 0.65;
     }
 
     .endpoint code {

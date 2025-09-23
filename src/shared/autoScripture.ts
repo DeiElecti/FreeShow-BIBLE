@@ -68,11 +68,19 @@ export interface AutoScriptureStatus {
     lastTranscriptAt?: number
     lastSuggestionAt?: number
     httpEndpoint?: string
+    httpEndpoints?: AutoScriptureEndpoint[]
 }
 
 export interface AutoScriptureError {
     message: string
     fatal?: boolean
+}
+
+export type AutoScriptureEndpointType = "loopback" | "lan" | "custom"
+
+export interface AutoScriptureEndpoint {
+    url: string
+    type: AutoScriptureEndpointType
 }
 
 export type AutoScriptureCommand =

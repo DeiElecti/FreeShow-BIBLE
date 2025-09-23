@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 import express, { type Request, type Response } from "express"
 import http from "http"
+import os from "os"
 import {
     DEFAULT_SERMON_LISTENER_SETTINGS,
     type AutoScriptureCommand,
@@ -8,6 +9,7 @@ import {
     type AutoScriptureReference,
     type AutoScriptureStatus,
     type AutoScriptureSuggestion,
+    type AutoScriptureEndpoint,
     type SermonListenerSettings,
     formatScriptureReference,
     getBookMeta
@@ -36,7 +38,8 @@ let status: AutoScriptureStatus = {
     maxVerses: DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
     scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
     recognizedReferences: 0,
-    httpEndpoint: undefined
+    httpEndpoint: undefined,
+    httpEndpoints: []
 }
 
 let httpServer: http.Server | null = null
@@ -89,6 +92,8 @@ export function handleAutoScriptureCommand(command: AutoScriptureCommand): AutoS
         case "RESET_HISTORY":
             seenReferences.clear()
             status.recognizedReferences = 0
+            status.lastSuggestionAt = undefined
+            sendReset()
             return emitStatus()
         default:
             return emitStatus()
@@ -129,6 +134,7 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.scriptureId = settings.scriptureId
     if (!settings.enabled) {
         status.httpEndpoint = undefined
+        status.httpEndpoints = []
         stopServer()
         emitStatus()
         return
@@ -136,11 +142,13 @@ function applySettings(newSettings: SermonListenerSettings) {
 
     if (mustRestart || !status.listening) {
         status.httpEndpoint = undefined
+        status.httpEndpoints = []
         startServer()
         return
     }
 
     status.httpEndpoint = `http://127.0.0.1:${settings.port}/transcript`
+    status.httpEndpoints = buildHttpEndpoints(settings.port)
     emitStatus()
 }
 
@@ -217,13 +225,15 @@ function startServer() {
 
     httpServer = expressApp.listen(settings.port, "0.0.0.0", () => {
         status.listening = true
-        status.httpEndpoint = `http://127.0.0.1:${settings.port}/transcript`
+        status.httpEndpoints = buildHttpEndpoints(settings.port)
+        status.httpEndpoint = status.httpEndpoints[0]?.url
         emitStatus()
     })
 
     httpServer.on("error", (err: NodeJS.ErrnoException) => {
         status.listening = false
         status.httpEndpoint = undefined
+        status.httpEndpoints = []
         sendError(`Failed to start sermon listener on port ${settings.port}: ${err.message}`, true)
         emitStatus()
     })
@@ -240,6 +250,7 @@ function stopServer() {
     expressApp = null
     status.listening = false
     status.httpEndpoint = undefined
+    status.httpEndpoints = []
 }
 
 interface ExternalIngestOptions {
@@ -491,6 +502,37 @@ function createReferenceKey(reference: AutoScriptureSuggestion["reference"]) {
     return `${reference.bookOsis}.${chapter}-${endChapter}.${startVerse}-${endVerse}`
 }
 
+function buildHttpEndpoints(port: number): AutoScriptureEndpoint[] {
+    const endpoints: AutoScriptureEndpoint[] = []
+    const seen = new Set<string>()
+
+    const pushEndpoint = (url: string, type: AutoScriptureEndpoint["type"]) => {
+        if (!url) return
+        const normalized = url.replace(/\/+$/, "")
+        if (seen.has(normalized)) return
+        seen.add(normalized)
+        endpoints.push({ url: normalized, type })
+    }
+
+    pushEndpoint(`http://127.0.0.1:${port}/transcript`, "loopback")
+    pushEndpoint(`http://localhost:${port}/transcript`, "loopback")
+
+    const interfaces = os.networkInterfaces()
+    Object.values(interfaces).forEach((addresses) => {
+        addresses?.forEach((address) => {
+            if (!address) return
+            const family = typeof address.family === "string" ? address.family : address.family === 4 ? "IPv4" : "IPv6"
+            if (family !== "IPv4") return
+            if (address.internal) return
+            const ip = address.address
+            if (!ip) return
+            pushEndpoint(`http://${ip}:${port}/transcript`, "lan")
+        })
+    })
+
+    return endpoints
+}
+
 function emitStatus(): AutoScriptureStatus {
     const payload: AutoScriptureStatus = { ...status }
     toApp(SCRIPTURE_AUTO, { channel: "STATUS", data: payload })
@@ -503,6 +545,10 @@ function sendTranscriptEvent(event: TranscriptPayload) {
 
 function sendSuggestion(suggestion: AutoScriptureSuggestion) {
     toApp(SCRIPTURE_AUTO, { channel: "SUGGESTION", data: suggestion })
+}
+
+function sendReset() {
+    toApp(SCRIPTURE_AUTO, { channel: "RESET", data: null })
 }
 
 function sendError(message: string, fatal = false) {

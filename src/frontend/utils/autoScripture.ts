@@ -16,6 +16,11 @@ import { activeDrawerTab, autoScriptureStatus, autoScriptureSuggestions, autoScr
 
 let initialized = false
 
+function resetQueues() {
+    autoScriptureSuggestions.set([])
+    autoScriptureTranscripts.set([])
+}
+
 export function initAutoScripture() {
     if (initialized) return
     initialized = true
@@ -32,6 +37,9 @@ export function initAutoScripture() {
                     break
                 case "TRANSCRIPT":
                     appendTranscript(msg.data as AutoScriptureTranscriptEvent)
+                    break
+                case "RESET":
+                    resetQueues()
                     break
                 case "ERROR":
                     if (msg.data?.message) newToast(msg.data.message)
@@ -89,6 +97,7 @@ function sanitizeReferenceNumber(value: AutoScriptureExternalReference["chapter"
 }
 
 export function resetAutoScriptureHistory() {
+    resetQueues()
     sendMain(Main.AUTO_SCRIPTURE, { action: "RESET_HISTORY" })
 }
 

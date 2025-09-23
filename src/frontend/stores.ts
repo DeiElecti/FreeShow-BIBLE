@@ -287,7 +287,8 @@ export const autoScriptureStatus: Writable<AutoScriptureStatus> = writable({
     duplicateInterval: DEFAULT_SERMON_LISTENER_SETTINGS.duplicateInterval,
     maxVerses: DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
     scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
-    recognizedReferences: 0
+    recognizedReferences: 0,
+    httpEndpoints: []
 })
 export const autoScriptureSuggestions: Writable<AutoScriptureSuggestion[]> = writable([])
 export const autoScriptureTranscripts: Writable<AutoScriptureTranscriptEvent[]> = writable([])
