@@ -111,6 +111,12 @@ export interface AutoScriptureError {
     fatal?: boolean
 }
 
+export interface AutoScriptureStatusReport {
+    status: AutoScriptureStatus
+    suggestions: AutoScriptureSuggestion[]
+    transcripts: AutoScriptureTranscriptEvent[]
+}
+
 export type AutoScriptureEndpointType = "loopback" | "lan" | "custom"
 
 export interface AutoScriptureEndpoint {

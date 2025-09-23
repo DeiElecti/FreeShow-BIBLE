@@ -11,6 +11,8 @@ import {
     type AutoScriptureStatus,
     type AutoScriptureSuggestion,
     type AutoScriptureEndpoint,
+    type AutoScriptureTranscriptEvent,
+    type AutoScriptureStatusReport,
     type SermonTranscriberSettings,
     type SermonListenerSettings,
     formatScriptureReference,
@@ -60,6 +62,10 @@ let expressApp: express.Express | null = null
 const seenReferences: Map<string, number> = new Map()
 const parserAvailable = hasReferenceParser()
 let transcriber: SermonTranscriber | null = null
+const transcriptHistory: AutoScriptureTranscriptEvent[] = []
+const suggestionHistory: AutoScriptureSuggestion[] = []
+const TRANSCRIPT_HISTORY_LIMIT = 25
+const SUGGESTION_HISTORY_LIMIT = 25
 
 export function initializeSermonListener() {
     applySettings(readSettings())
@@ -107,6 +113,7 @@ export function handleAutoScriptureCommand(command: AutoScriptureCommand): AutoS
             seenReferences.clear()
             status.recognizedReferences = 0
             status.lastSuggestionAt = undefined
+            clearHistories()
             sendReset()
             return emitStatus()
         default:
@@ -258,6 +265,10 @@ function startServer() {
             parser: parserAvailable,
             recognized: status.recognizedReferences
         })
+    })
+
+    expressApp.get("/status", (_req: Request, res: Response) => {
+        res.json(buildStatusReport())
     })
 
     httpServer = expressApp.listen(settings.port, "0.0.0.0", () => {
@@ -472,7 +483,7 @@ function sanitizeNumber(value: unknown): number | null {
 }
 
 function processTranscript({ text, confidence, speaker, timestamp, source }: TranscriptPayload) {
-    const now = timestamp ?? Date.now()
+    const now = sanitizeTimestamp(timestamp)
 
     const payload = {
         text,
@@ -611,17 +622,22 @@ function normalizeCustomEndpoint(value: unknown): string | null {
 }
 
 function emitStatus(): AutoScriptureStatus {
-    const payload: AutoScriptureStatus = { ...status }
+    const payload = serializeStatus(status)
     toApp(SCRIPTURE_AUTO, { channel: "STATUS", data: payload })
     return payload
 }
 
 function sendTranscriptEvent(event: TranscriptPayload) {
-    toApp(SCRIPTURE_AUTO, { channel: "TRANSCRIPT", data: event })
+    const payload = sanitizeTranscriptEvent(event)
+    if (!payload) return
+    recordTranscript(payload)
+    toApp(SCRIPTURE_AUTO, { channel: "TRANSCRIPT", data: payload })
 }
 
 function sendSuggestion(suggestion: AutoScriptureSuggestion) {
-    toApp(SCRIPTURE_AUTO, { channel: "SUGGESTION", data: suggestion })
+    const payload = cloneSuggestion(suggestion)
+    recordSuggestion(payload)
+    toApp(SCRIPTURE_AUTO, { channel: "SUGGESTION", data: payload })
 }
 
 function sendReset() {
@@ -630,6 +646,91 @@ function sendReset() {
 
 function sendError(message: string, fatal = false) {
     toApp(SCRIPTURE_AUTO, { channel: "ERROR", data: { message, fatal } })
+}
+
+function clearHistories() {
+    transcriptHistory.length = 0
+    suggestionHistory.length = 0
+}
+
+function sanitizeTranscriptEvent(event: TranscriptPayload): AutoScriptureTranscriptEvent | null {
+    if (!event?.text) return null
+    const text = `${event.text}`.trim()
+    if (!text) return null
+
+    const sanitized: AutoScriptureTranscriptEvent = {
+        text,
+        timestamp: sanitizeTimestamp(event.timestamp)
+    }
+
+    if (typeof event.confidence === "number" && !Number.isNaN(event.confidence)) {
+        sanitized.confidence = event.confidence
+    }
+    if (typeof event.speaker === "string" && event.speaker.trim()) sanitized.speaker = event.speaker.trim()
+    if (typeof event.source === "string" && event.source.trim()) sanitized.source = event.source.trim()
+
+    return sanitized
+}
+
+function recordTranscript(event: AutoScriptureTranscriptEvent) {
+    const cloned = cloneTranscript(event)
+    transcriptHistory.unshift(cloned)
+    if (transcriptHistory.length > TRANSCRIPT_HISTORY_LIMIT) transcriptHistory.length = TRANSCRIPT_HISTORY_LIMIT
+}
+
+function recordSuggestion(suggestion: AutoScriptureSuggestion) {
+    const cloned = cloneSuggestion(suggestion)
+    const existingIndex = suggestionHistory.findIndex((item) => item.id === cloned.id)
+    if (existingIndex > -1) suggestionHistory.splice(existingIndex, 1)
+    suggestionHistory.unshift(cloned)
+    if (suggestionHistory.length > SUGGESTION_HISTORY_LIMIT) suggestionHistory.length = SUGGESTION_HISTORY_LIMIT
+}
+
+function cloneTranscript(event: AutoScriptureTranscriptEvent): AutoScriptureTranscriptEvent {
+    const cloned: AutoScriptureTranscriptEvent = {
+        text: event.text,
+        timestamp: event.timestamp
+    }
+    if (event.confidence !== undefined) cloned.confidence = event.confidence
+    if (event.speaker) cloned.speaker = event.speaker
+    if (event.source) cloned.source = event.source
+    return cloned
+}
+
+function cloneSuggestion(suggestion: AutoScriptureSuggestion): AutoScriptureSuggestion {
+    return {
+        ...suggestion,
+        reference: cloneReference(suggestion.reference),
+        transcript: suggestion.transcript,
+        formatted: suggestion.formatted
+    }
+}
+
+function cloneReference(reference: AutoScriptureReference): AutoScriptureReference {
+    return {
+        ...reference,
+        verses: [...reference.verses]
+    }
+}
+
+function buildStatusReport(): AutoScriptureStatusReport {
+    return {
+        status: serializeStatus(status),
+        transcripts: transcriptHistory.map((entry) => cloneTranscript(entry)),
+        suggestions: suggestionHistory.map((entry) => cloneSuggestion(entry))
+    }
+}
+
+function serializeStatus(current: AutoScriptureStatus): AutoScriptureStatus {
+    const httpEndpoints = Array.isArray(current.httpEndpoints)
+        ? current.httpEndpoints.map((endpoint) => ({ ...endpoint }))
+        : undefined
+
+    return {
+        ...current,
+        customEndpoints: [...current.customEndpoints],
+        httpEndpoints
+    }
 }
 
 function ensureTranscriber() {
@@ -673,7 +774,7 @@ function handleTranscriberResult(event: TranscriberTranscriptEvent) {
     processTranscript({
         text: event.text,
         confidence: event.confidence,
-        timestamp: event.timestamp,
+        timestamp: sanitizeTimestamp(event.timestamp),
         source: event.source || status.transcriberEngine || "transcriber"
     })
 }
@@ -683,7 +784,7 @@ function handleTranscriberPartial(event: TranscriberTranscriptEvent) {
     const allowPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
     if (!allowPartial) return
 
-    const timestamp = event.timestamp ?? Date.now()
+    const timestamp = sanitizeTimestamp(event.timestamp)
     status.lastTranscriptAt = timestamp
     sendTranscriptEvent({
         text: event.text,
