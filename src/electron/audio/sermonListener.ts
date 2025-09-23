@@ -64,6 +64,13 @@ const parserAvailable = hasReferenceParser()
 let transcriber: SermonTranscriber | null = null
 const transcriptHistory: AutoScriptureTranscriptEvent[] = []
 const suggestionHistory: AutoScriptureSuggestion[] = []
+interface SseClient {
+    id: string
+    res: Response
+    heartbeat: NodeJS.Timeout | null
+}
+const sseClients: Map<string, SseClient> = new Map()
+const SSE_HEARTBEAT_INTERVAL = 30000
 const TRANSCRIPT_HISTORY_LIMIT = 25
 const SUGGESTION_HISTORY_LIMIT = 25
 
@@ -271,6 +278,33 @@ function startServer() {
         res.json(buildStatusReport())
     })
 
+    expressApp.get("/events", (req: Request, res: Response) => {
+        res.setHeader("Content-Type", "text/event-stream")
+        res.setHeader("Cache-Control", "no-cache")
+        res.setHeader("Connection", "keep-alive")
+        res.setHeader("X-Accel-Buffering", "no")
+        ;(res as any).flushHeaders?.()
+
+        const client = registerSseClient(res)
+        const cleanup = () => removeSseClient(client.id)
+
+        req.on("close", cleanup)
+        req.on("end", cleanup)
+        req.on("error", cleanup)
+        res.on("close", cleanup)
+        res.on("finish", cleanup)
+        res.on("error", cleanup)
+
+        try {
+            res.write(`: connected\n\n`)
+        } catch (err) {
+            removeSseClient(client.id)
+            return
+        }
+
+        sendSseSnapshot(client)
+    })
+
     httpServer = expressApp.listen(settings.port, "0.0.0.0", () => {
         status.listening = true
         status.httpEndpoints = buildHttpEndpoints(settings.port, settings.customEndpoints)
@@ -298,6 +332,7 @@ function stopServer() {
     }
     httpServer = null
     expressApp = null
+    clearSseClients()
     status.listening = false
     status.httpEndpoint = undefined
     status.httpEndpoints = []
@@ -563,7 +598,12 @@ function buildHttpEndpoints(port: number, custom: string[] = []): AutoScriptureE
         const normalized = url.replace(/\/+$/, "")
         if (seen.has(normalized)) return
         seen.add(normalized)
-        endpoints.push({ url: normalized, type })
+
+        const reference = normalized.replace(/\/transcript$/i, "/reference")
+        const statusUrl = normalized.replace(/\/transcript$/i, "/status")
+        const events = normalized.replace(/\/transcript$/i, "/events")
+
+        endpoints.push({ url: normalized, type, reference, status: statusUrl, events })
     }
 
     pushEndpoint(`http://127.0.0.1:${port}/transcript`, "loopback")
@@ -624,6 +664,7 @@ function normalizeCustomEndpoint(value: unknown): string | null {
 function emitStatus(): AutoScriptureStatus {
     const payload = serializeStatus(status)
     toApp(SCRIPTURE_AUTO, { channel: "STATUS", data: payload })
+    broadcastSse("status", payload)
     return payload
 }
 
@@ -632,20 +673,26 @@ function sendTranscriptEvent(event: TranscriptPayload) {
     if (!payload) return
     recordTranscript(payload)
     toApp(SCRIPTURE_AUTO, { channel: "TRANSCRIPT", data: payload })
+    broadcastSse("transcript", payload)
 }
 
 function sendSuggestion(suggestion: AutoScriptureSuggestion) {
     const payload = cloneSuggestion(suggestion)
     recordSuggestion(payload)
     toApp(SCRIPTURE_AUTO, { channel: "SUGGESTION", data: payload })
+    broadcastSse("suggestion", payload)
 }
 
 function sendReset() {
     toApp(SCRIPTURE_AUTO, { channel: "RESET", data: null })
+    broadcastSse("reset", null)
+    broadcastSse("snapshot", buildStatusReport())
 }
 
 function sendError(message: string, fatal = false) {
-    toApp(SCRIPTURE_AUTO, { channel: "ERROR", data: { message, fatal } })
+    const payload = { message, fatal }
+    toApp(SCRIPTURE_AUTO, { channel: "ERROR", data: payload })
+    broadcastSse("error", payload)
 }
 
 function clearHistories() {
@@ -827,4 +874,87 @@ function sanitizeTranscriberSettings(raw: unknown): SermonTranscriberSettings {
         enablePartial,
         maxAlternatives
     }
+}
+
+function registerSseClient(res: Response): SseClient {
+    const id = typeof randomUUID === "function" ? randomUUID() : `sse-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const client: SseClient = {
+        id,
+        res,
+        heartbeat: null
+    }
+
+    client.heartbeat = setInterval(() => sendSseHeartbeat(client), SSE_HEARTBEAT_INTERVAL)
+    sseClients.set(id, client)
+    return client
+}
+
+function removeSseClient(id: string, end = false) {
+    const client = sseClients.get(id)
+    if (!client) return
+
+    if (client.heartbeat) {
+        clearInterval(client.heartbeat)
+        client.heartbeat = null
+    }
+
+    if (end) {
+        try {
+            client.res.end()
+        } catch (err) {
+            // Ignore errors when closing the stream.
+        }
+    }
+
+    sseClients.delete(id)
+}
+
+function clearSseClients() {
+    Array.from(sseClients.keys()).forEach((id) => removeSseClient(id, true))
+}
+
+function sendSseHeartbeat(client: SseClient) {
+    try {
+        client.res.write(`: ping ${Date.now()}\n\n`)
+    } catch (err) {
+        removeSseClient(client.id)
+    }
+}
+
+function sendSseSnapshot(client: SseClient) {
+    const snapshot = formatSsePayload("snapshot", buildStatusReport())
+    const statusPayload = formatSsePayload("status", serializeStatus(status))
+
+    try {
+        if (snapshot) client.res.write(snapshot)
+        if (statusPayload) client.res.write(statusPayload)
+    } catch (err) {
+        removeSseClient(client.id)
+    }
+}
+
+function broadcastSse(event: string, data: unknown) {
+    if (!sseClients.size) return
+    const payload = formatSsePayload(event, data)
+    if (!payload) return
+
+    sseClients.forEach((client) => {
+        try {
+            client.res.write(payload)
+        } catch (err) {
+            removeSseClient(client.id)
+        }
+    })
+}
+
+function formatSsePayload(event: string, data: unknown): string | null {
+    let body = "null"
+    try {
+        body = JSON.stringify(data ?? null)
+    } catch (err) {
+        console.warn("Failed to serialize SSE payload:", err)
+        return null
+    }
+
+    return `event: ${event}\ndata: ${body}\n\n`
 }

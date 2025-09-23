@@ -52,6 +52,7 @@
         transcript: string
         reference: string
         status: string
+        events: string
         type: AutoScriptureEndpointType
     }
 
@@ -59,6 +60,7 @@
     let endpointList: DisplayEndpoint[] = []
     let primaryReferenceEndpoint = ""
     let primaryStatusEndpoint = ""
+    let primaryEventsEndpoint = ""
     let listenerSettings: SermonListenerSettings = { ...DEFAULT_SERMON_LISTENER_SETTINGS }
     let transcriberSettings: SermonTranscriberSettings = { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
     let transcriberEngineOptions: { value: string; label: string }[] = []
@@ -88,6 +90,7 @@
     $: endpointList = buildEndpointList(status, listenerSettings)
     $: primaryReferenceEndpoint = endpointList[0]?.reference || ""
     $: primaryStatusEndpoint = endpointList[0]?.status || ""
+    $: primaryEventsEndpoint = endpointList[0]?.events || ""
     $: scriptureOptions = buildScriptureOptions($scriptures, $dictionary)
     $: scriptureTargetLabel = listenerSettings.scriptureId
         ? getScriptureName(listenerSettings.scriptureId)
@@ -239,12 +242,14 @@
             if (!transcript || seen.has(transcript)) return
             seen.add(transcript)
 
-            const reference = transcript.replace(/\/transcript$/i, "/reference")
-            const statusUrl = transcript.replace(/\/transcript$/i, "/status")
+            const reference = normalizeEndpointVariant(endpoint.reference, transcript, "/reference")
+            const statusUrl = normalizeEndpointVariant(endpoint.status, transcript, "/status")
+            const eventsUrl = normalizeEndpointVariant(endpoint.events, transcript, "/events")
             collected.push({
                 transcript,
                 reference,
                 status: statusUrl,
+                events: eventsUrl,
                 type: endpoint.type ?? "loopback"
             })
         })
@@ -293,6 +298,23 @@
         normalized = normalized.replace(/\/+$/, "")
         if (!/\/transcript$/i.test(normalized)) normalized = `${normalized}/transcript`
         return normalized
+    }
+
+    function normalizeEndpointVariant(value: string | undefined, base: string, suffix: string) {
+        const candidate = normalizeGenericUrl(value)
+        if (candidate) return candidate
+        return normalizeGenericUrl(base.replace(/\/transcript$/i, suffix))
+    }
+
+    function normalizeGenericUrl(url: string | undefined): string {
+        if (!url) return ""
+        let normalized = url.trim()
+        if (!normalized) return ""
+        if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+            normalized = `http://${normalized}`
+        }
+        normalized = normalized.replace(/\s/g, "")
+        return normalized.replace(/\/+$/, "")
     }
 
     function getEndpointTypeLabel(type?: AutoScriptureEndpointType) {
@@ -444,6 +466,24 @@
                         small
                     />
                 </div>
+                <div class="endpoint" class:inactive={!status.listening}>
+                    <div class="endpoint-info">
+                        <span class="endpoint-label">
+                            <T id="scripture.auto_listener_endpoint_events" />
+                            <span class="endpoint-type">
+                                <T id={getEndpointTypeLabel(endpoint.type)} />
+                            </span>
+                        </span>
+                        <code>{endpoint.events}</code>
+                    </div>
+                    <MaterialButton
+                        icon="content_copy"
+                        variant="text"
+                        title="scripture.auto_listener_copy"
+                        on:click={() => copyValue(endpoint.events)}
+                        small
+                    />
+                </div>
             {/each}
         </div>
         <p class="endpoint-help">
@@ -457,6 +497,11 @@
         {#if primaryStatusEndpoint}
             <p class="endpoint-help">
                 <T id="scripture.auto_listener_status_help" replace={[primaryStatusEndpoint]} />
+            </p>
+        {/if}
+        {#if primaryEventsEndpoint}
+            <p class="endpoint-help">
+                <T id="scripture.auto_listener_events_help" replace={[primaryEventsEndpoint]} />
             </p>
         {/if}
     {/if}

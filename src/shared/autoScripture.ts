@@ -122,6 +122,9 @@ export type AutoScriptureEndpointType = "loopback" | "lan" | "custom"
 export interface AutoScriptureEndpoint {
     url: string
     type: AutoScriptureEndpointType
+    reference?: string
+    status?: string
+    events?: string
 }
 
 export type AutoScriptureCommand =
