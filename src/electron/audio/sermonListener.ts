@@ -4,12 +4,14 @@ import http from "http"
 import os from "os"
 import {
     DEFAULT_SERMON_LISTENER_SETTINGS,
+    DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
     type AutoScriptureCommand,
     type AutoScriptureExternalReference,
     type AutoScriptureReference,
     type AutoScriptureStatus,
     type AutoScriptureSuggestion,
     type AutoScriptureEndpoint,
+    type SermonTranscriberSettings,
     type SermonListenerSettings,
     formatScriptureReference,
     getBookMeta
@@ -18,6 +20,11 @@ import { SCRIPTURE_AUTO } from "../../types/Channels"
 import { stores } from "../data/store"
 import { toApp } from "../index"
 import { extractReferences, hasReferenceParser } from "./scriptureReference"
+import {
+    SermonTranscriber,
+    type TranscriberStatusUpdate,
+    type TranscriberTranscriptEvent
+} from "./transcriber"
 
 interface TranscriptPayload {
     text: string
@@ -40,13 +47,19 @@ let status: AutoScriptureStatus = {
     recognizedReferences: 0,
     httpEndpoint: undefined,
     httpEndpoints: [],
-    customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints]
+    customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
+    transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
+    transcriberReady: false,
+    transcriberMessage: undefined,
+    transcriberSampleRate: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate,
+    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
 }
 
 let httpServer: http.Server | null = null
 let expressApp: express.Express | null = null
 const seenReferences: Map<string, number> = new Map()
 const parserAvailable = hasReferenceParser()
+let transcriber: SermonTranscriber | null = null
 
 export function initializeSermonListener() {
     applySettings(readSettings())
@@ -101,8 +114,9 @@ export function handleAutoScriptureCommand(command: AutoScriptureCommand): AutoS
     }
 }
 
-export function submitAudioBuffer(_buffer: Buffer, _info: { sampleRate: number; channelCount: number }) {
-    // Placeholder – audio transcription engines can hook into this in the future.
+export function submitAudioBuffer(buffer: Buffer, info: { sampleRate: number; channelCount: number }) {
+    if (!settings.enabled) return
+    ensureTranscriber()?.pushAudio(buffer, info)
 }
 
 function readSettings(): SermonListenerSettings {
@@ -119,6 +133,8 @@ function readSettings(): SermonListenerSettings {
           )
         : []
 
+    const transcriber = sanitizeTranscriberSettings((stored as any)?.transcriber)
+
     const sanitized: SermonListenerSettings = {
         enabled: stored.enabled ?? DEFAULT_SERMON_LISTENER_SETTINGS.enabled,
         autoDisplay: stored.autoDisplay ?? DEFAULT_SERMON_LISTENER_SETTINGS.autoDisplay,
@@ -127,7 +143,8 @@ function readSettings(): SermonListenerSettings {
         duplicateInterval: typeof stored.duplicateInterval === "number" && stored.duplicateInterval > 0 ? stored.duplicateInterval : DEFAULT_SERMON_LISTENER_SETTINGS.duplicateInterval,
         maxVerses: typeof stored.maxVerses === "number" && stored.maxVerses > 0 ? Math.max(1, Math.floor(stored.maxVerses)) : DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
         scriptureId: stored.scriptureId ?? DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
-        customEndpoints
+        customEndpoints,
+        transcriber
     }
 
     return sanitized
@@ -145,9 +162,15 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.maxVerses = settings.maxVerses
     status.scriptureId = settings.scriptureId
     status.customEndpoints = [...settings.customEndpoints]
+    status.transcriberEngine = settings.transcriber?.engine ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine
+    status.transcriberSampleRate = settings.transcriber?.sampleRate ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate
+    status.transcriberPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
     if (!settings.enabled) {
         status.httpEndpoint = undefined
         status.httpEndpoints = []
+        status.transcriberReady = false
+        ensureTranscriber()?.setActive(false)
+        scheduleTranscriberUpdate()
         stopServer()
         emitStatus()
         return
@@ -162,6 +185,7 @@ function applySettings(newSettings: SermonListenerSettings) {
 
     status.httpEndpoints = buildHttpEndpoints(settings.port, settings.customEndpoints)
     status.httpEndpoint = status.httpEndpoints[0]?.url
+    scheduleTranscriberUpdate()
     emitStatus()
 }
 
@@ -240,6 +264,7 @@ function startServer() {
         status.listening = true
         status.httpEndpoints = buildHttpEndpoints(settings.port, settings.customEndpoints)
         status.httpEndpoint = status.httpEndpoints[0]?.url
+        scheduleTranscriberUpdate()
         emitStatus()
     })
 
@@ -266,6 +291,7 @@ function stopServer() {
     status.httpEndpoint = undefined
     status.httpEndpoints = []
     status.customEndpoints = [...settings.customEndpoints]
+    ensureTranscriber()?.setActive(false)
 }
 
 interface ExternalIngestOptions {
@@ -604,4 +630,100 @@ function sendReset() {
 
 function sendError(message: string, fatal = false) {
     toApp(SCRIPTURE_AUTO, { channel: "ERROR", data: { message, fatal } })
+}
+
+function ensureTranscriber() {
+    if (!transcriber) {
+        transcriber = new SermonTranscriber({
+            onResult: handleTranscriberResult,
+            onPartial: handleTranscriberPartial,
+            onStatus: handleTranscriberStatus,
+            onError: handleTranscriberError
+        })
+    }
+    return transcriber
+}
+
+function scheduleTranscriberUpdate() {
+    const instance = ensureTranscriber()
+    const config = settings.transcriber ?? { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
+    const shouldBeActive = !!(settings.enabled && config.engine !== "disabled")
+
+    instance
+        .configure(config)
+        .then(() => {
+            instance.setActive(shouldBeActive)
+        })
+        .catch((err) => {
+            handleTranscriberError(err instanceof Error ? err.message : String(err))
+        })
+}
+
+function handleTranscriberStatus(update: TranscriberStatusUpdate) {
+    status.transcriberEngine = update.engine
+    status.transcriberReady = update.ready
+    status.transcriberMessage = update.message
+    status.transcriberSampleRate = update.sampleRate
+    status.transcriberPartial = update.partial
+    emitStatus()
+}
+
+function handleTranscriberResult(event: TranscriberTranscriptEvent) {
+    if (!event?.text) return
+    processTranscript({
+        text: event.text,
+        confidence: event.confidence,
+        timestamp: event.timestamp,
+        source: event.source || status.transcriberEngine || "transcriber"
+    })
+}
+
+function handleTranscriberPartial(event: TranscriberTranscriptEvent) {
+    if (!event?.text) return
+    const allowPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
+    if (!allowPartial) return
+
+    const timestamp = event.timestamp ?? Date.now()
+    status.lastTranscriptAt = timestamp
+    sendTranscriptEvent({
+        text: event.text,
+        timestamp,
+        confidence: event.confidence,
+        source: `${event.source || status.transcriberEngine || "transcriber"}-partial`
+    })
+}
+
+function handleTranscriberError(message: string) {
+    status.transcriberReady = false
+    status.transcriberMessage = message
+    emitStatus()
+    if (message) {
+        sendError(message, false)
+    }
+}
+
+function sanitizeTranscriberSettings(raw: unknown): SermonTranscriberSettings {
+    const defaults = DEFAULT_SERMON_TRANSCRIBER_SETTINGS
+    const candidate = (raw || {}) as Partial<SermonTranscriberSettings> & { [key: string]: any }
+
+    const engineValue = (candidate.engine ?? candidate.type ?? candidate.provider) as string | undefined
+    const normalizedEngine = typeof engineValue === "string" ? engineValue.toLowerCase().trim() : ""
+    const engine: SermonTranscriberSettings["engine"] = normalizedEngine === "vosk" ? "vosk" : "disabled"
+
+    const model = typeof candidate.modelPath === "string" ? candidate.modelPath : typeof (candidate as any).model === "string" ? (candidate as any).model : ""
+    const sampleRate = Number.isFinite(candidate.sampleRate)
+        ? Math.max(8000, Math.min(96000, Math.floor(Number(candidate.sampleRate))))
+        : defaults.sampleRate
+    const enablePartial = typeof candidate.enablePartial === "boolean" ? candidate.enablePartial : defaults.enablePartial
+    const maxAlternatives = Number.isFinite(candidate.maxAlternatives)
+        ? Math.max(0, Math.min(10, Math.floor(Number(candidate.maxAlternatives))))
+        : defaults.maxAlternatives
+
+    return {
+        engine,
+        modelPath: model,
+        sampleRate,
+        enablePartial,
+        maxAlternatives
+    }
 }

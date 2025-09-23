@@ -3,11 +3,13 @@
     import {
         BIBLE_BOOK_META,
         DEFAULT_SERMON_LISTENER_SETTINGS,
+        DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
         getBookMeta,
         type AutoScriptureEndpoint,
         type AutoScriptureEndpointType,
         type AutoScriptureStatus,
-        type SermonListenerSettings
+        type SermonListenerSettings,
+        type SermonTranscriberSettings
     } from "../../../../shared/autoScripture"
     import { Main } from "../../../../types/IPC/Main"
     import Icon from "../../helpers/Icon.svelte"
@@ -55,6 +57,13 @@
     let status: AutoScriptureStatus
     let endpointList: DisplayEndpoint[] = []
     let primaryReferenceEndpoint = ""
+    let listenerSettings: SermonListenerSettings = { ...DEFAULT_SERMON_LISTENER_SETTINGS }
+    let transcriberSettings: SermonTranscriberSettings = { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
+    let transcriberEngineOptions: { value: string; label: string }[] = []
+    const transcriberEngineChoices = [
+        { value: "disabled", label: "scripture.auto_listener_transcriber_engine_disabled" },
+        { value: "vosk", label: "scripture.auto_listener_transcriber_engine_vosk" }
+    ]
 
     $: status = $autoScriptureStatus
     $: suggestions = $autoScriptureSuggestions
@@ -67,7 +76,11 @@
         listenerSettings = {
             ...DEFAULT_SERMON_LISTENER_SETTINGS,
             ...storedSettings,
-            customEndpoints: customList
+            customEndpoints: customList,
+            transcriber: {
+                ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
+                ...(storedSettings.transcriber || {})
+            }
         }
     }
     $: endpointList = buildEndpointList(status, listenerSettings)
@@ -76,6 +89,14 @@
     $: scriptureTargetLabel = listenerSettings.scriptureId
         ? getScriptureName(listenerSettings.scriptureId)
         : ""
+    $: transcriberSettings = {
+        ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
+        ...(listenerSettings.transcriber || {})
+    }
+    $: transcriberEngineOptions = transcriberEngineChoices.map((option) => ({
+        value: option.value,
+        label: translateText(option.label, $dictionary) || option.label
+    }))
 
     function updateSetting<K extends keyof SermonListenerSettings>(key: K, value: SermonListenerSettings[K]) {
         special.update((data) => {
@@ -94,6 +115,34 @@
         const updatedSpecial = get(special)
         sendMain(Main.SET_STORE_VALUE, { file: "SETTINGS", key: "special", value: updatedSpecial })
         sendMain(Main.AUTO_SCRIPTURE, { action: "REQUEST_STATUS" })
+    }
+
+    function updateTranscriberSetting<K extends keyof SermonTranscriberSettings>(
+        key: K,
+        value: SermonTranscriberSettings[K]
+    ) {
+        const current = listenerSettings.transcriber || DEFAULT_SERMON_TRANSCRIBER_SETTINGS
+        const updated: SermonTranscriberSettings = {
+            ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS,
+            ...current,
+            [key]: value
+        }
+
+        updateSetting("transcriber", updated)
+
+        autoScriptureStatus.update((state) => {
+            const next = { ...state }
+            if (key === "engine") {
+                next.transcriberEngine = updated.engine
+                next.transcriberReady = false
+                next.transcriberMessage = undefined
+            }
+            if (key === "sampleRate") next.transcriberSampleRate = updated.sampleRate
+            if (key === "enablePartial") next.transcriberPartial = updated.enablePartial
+            if (key === "modelPath") next.transcriberMessage = undefined
+            if (key === "maxAlternatives") next.transcriberMessage = state.transcriberMessage
+            return next
+        })
     }
 
     $: if (manualVerseEnd < manualVerseStart) manualVerseEnd = manualVerseStart
@@ -403,6 +452,74 @@
             <strong><T id="scripture.auto_listener_last_reference" /></strong>
             <span>{formatTimestamp(status.lastSuggestionAt)}</span>
         </p>
+    </div>
+
+    <div class="transcriber">
+        <div class="transcriber-header">
+            <h4><T id="scripture.auto_listener_transcriber" /></h4>
+        </div>
+        <p
+            class="transcriber-status"
+            class:ready={status.transcriberReady}
+            class:warning={!status.transcriberReady && status.transcriberEngine === "vosk"}
+        >
+            {#if status.transcriberEngine === "vosk"}
+                {#if status.transcriberReady}
+                    <T id="scripture.auto_listener_transcriber_status_ready" />
+                {:else if status.transcriberMessage}
+                    <T
+                        id="scripture.auto_listener_transcriber_status_error"
+                        replace={[status.transcriberMessage]}
+                    />
+                {:else}
+                    <T id="scripture.auto_listener_transcriber_status_loading" />
+                {/if}
+            {:else}
+                <T id="scripture.auto_listener_transcriber_status_disabled" />
+            {/if}
+        </p>
+        {#if status.transcriberEngine === "vosk" && status.transcriberMessage && status.transcriberReady}
+            <p class="transcriber-detail">{status.transcriberMessage}</p>
+        {:else if status.transcriberEngine === "vosk" && status.transcriberMessage}
+            <p class="transcriber-detail warning">{status.transcriberMessage}</p>
+        {/if}
+        <div class="transcriber-controls">
+            <MaterialDropdown
+                label="scripture.auto_listener_transcriber_engine"
+                options={transcriberEngineOptions}
+                value={transcriberSettings.engine}
+                on:change={(e) => updateTranscriberSetting("engine", e.detail)}
+            />
+            {#if transcriberSettings.engine === "vosk"}
+                <MaterialTextInput
+                    label="scripture.auto_listener_transcriber_model_path"
+                    value={transcriberSettings.modelPath}
+                    on:input={(e) => updateTranscriberSetting("modelPath", e.detail || "")}
+                    on:change={(e) => updateTranscriberSetting("modelPath", e.detail || "")}
+                />
+                <MaterialNumberInput
+                    label="scripture.auto_listener_transcriber_sample_rate"
+                    value={transcriberSettings.sampleRate}
+                    min={8000}
+                    max={96000}
+                    step={1000}
+                    on:change={(e) => updateTranscriberSetting("sampleRate", Number(e.detail))}
+                />
+                <MaterialNumberInput
+                    label="scripture.auto_listener_transcriber_max_alternatives"
+                    value={transcriberSettings.maxAlternatives}
+                    min={0}
+                    max={10}
+                    on:change={(e) => updateTranscriberSetting("maxAlternatives", Number(e.detail))}
+                />
+                <MaterialToggleSwitch
+                    label="scripture.auto_listener_transcriber_partial"
+                    checked={transcriberSettings.enablePartial}
+                    on:change={(e) => updateTranscriberSetting("enablePartial", e.detail)}
+                />
+            {/if}
+        </div>
+        <p class="transcriber-hint"><T id="scripture.auto_listener_transcriber_hint" /></p>
     </div>
 
     <div class="settings">
@@ -731,6 +848,59 @@
         display: flex;
         flex-direction: column;
         gap: 4px;
+    }
+
+    .transcriber {
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .transcriber-header h4 {
+        margin: 0;
+    }
+
+    .transcriber-status {
+        margin: 0;
+        font-size: 0.8em;
+        opacity: 0.75;
+    }
+
+    .transcriber-status.ready {
+        color: #9ed69e;
+        opacity: 1;
+    }
+
+    .transcriber-status.warning {
+        color: #ffcf82;
+        opacity: 1;
+    }
+
+    .transcriber-detail {
+        margin: 0;
+        font-size: 0.75em;
+        opacity: 0.75;
+        word-break: break-word;
+    }
+
+    .transcriber-detail.warning {
+        color: #ffb8b8;
+        opacity: 1;
+    }
+
+    .transcriber-controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 10px;
+        align-items: end;
+    }
+
+    .transcriber-hint {
+        margin: 0;
+        font-size: 0.75em;
+        opacity: 0.7;
     }
 
     .settings {

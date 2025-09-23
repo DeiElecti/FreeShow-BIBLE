@@ -1465,7 +1465,20 @@
         "auto_listener_custom_endpoint_remove": "Remove endpoint",
         "auto_listener_custom_endpoint_invalid": "Enter a valid endpoint before adding.",
         "auto_listener_custom_endpoint_duplicate": "That endpoint is already listed.",
-        "auto_listener_no_transcript": "No transcript provided"
+        "auto_listener_no_transcript": "No transcript provided",
+        "auto_listener_transcriber": "Built-in transcriber",
+        "auto_listener_transcriber_hint": "Install the optional Vosk module and download a compatible offline model to transcribe decoded audio automatically.",
+        "auto_listener_transcriber_engine": "Transcriber engine",
+        "auto_listener_transcriber_engine_disabled": "Disabled (HTTP ingestion only)",
+        "auto_listener_transcriber_engine_vosk": "Vosk (offline)",
+        "auto_listener_transcriber_model_path": "Vosk model folder",
+        "auto_listener_transcriber_sample_rate": "Recognizer sample rate (Hz)",
+        "auto_listener_transcriber_max_alternatives": "Max alternatives",
+        "auto_listener_transcriber_partial": "Emit partial transcripts",
+        "auto_listener_transcriber_status_ready": "Speech recognizer ready",
+        "auto_listener_transcriber_status_loading": "Loading speech recognizer…",
+        "auto_listener_transcriber_status_disabled": "Built-in speech recognition is disabled.",
+        "auto_listener_transcriber_status_error": "Speech recognizer error: {}"
     },
     "filter": {
         "blur": "Blur",

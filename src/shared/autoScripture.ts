@@ -1,3 +1,18 @@
+export type SermonTranscriberEngine = "disabled" | "vosk"
+
+export interface SermonTranscriberSettings {
+    /** Speech-recognition engine that should process decoded sermon audio. */
+    engine: SermonTranscriberEngine
+    /** Filesystem path that contains the offline model required by the recognizer. */
+    modelPath: string
+    /** Target sample rate fed into the recognizer after down-mixing. */
+    sampleRate: number
+    /** Whether partial transcripts should be emitted while audio is still buffered. */
+    enablePartial: boolean
+    /** Maximum alternative hypotheses returned by the engine (0 disables alternatives). */
+    maxAlternatives: number
+}
+
 export interface SermonListenerSettings {
     /** Whether the transcription listener is active. */
     enabled: boolean
@@ -15,6 +30,16 @@ export interface SermonListenerSettings {
     scriptureId: string
     /** Additional hostnames or proxy URLs that should be surfaced in the UI. */
     customEndpoints: string[]
+    /** Configuration for the built-in speech-recognition engine. */
+    transcriber: SermonTranscriberSettings
+}
+
+export const DEFAULT_SERMON_TRANSCRIBER_SETTINGS: SermonTranscriberSettings = {
+    engine: "disabled",
+    modelPath: "",
+    sampleRate: 16000,
+    enablePartial: true,
+    maxAlternatives: 0
 }
 
 export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
@@ -25,7 +50,8 @@ export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
     duplicateInterval: 45,
     maxVerses: 8,
     scriptureId: "",
-    customEndpoints: []
+    customEndpoints: [],
+    transcriber: { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
 }
 
 export interface AutoScriptureReference {
@@ -73,6 +99,11 @@ export interface AutoScriptureStatus {
     httpEndpoint?: string
     httpEndpoints?: AutoScriptureEndpoint[]
     customEndpoints: string[]
+    transcriberEngine: SermonTranscriberEngine
+    transcriberReady: boolean
+    transcriberMessage?: string
+    transcriberSampleRate: number
+    transcriberPartial: boolean
 }
 
 export interface AutoScriptureError {

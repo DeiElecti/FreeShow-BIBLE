@@ -20,7 +20,7 @@ import type { Outputs } from "./../types/Output"
 import type { DrawerTabIds } from "./../types/Tabs"
 import type { AudioData } from "./audio/audioPlayer"
 import type { AutoScriptureStatus, AutoScriptureSuggestion, AutoScriptureTranscriptEvent } from "../shared/autoScripture"
-import { DEFAULT_SERMON_LISTENER_SETTINGS } from "../shared/autoScripture"
+import { DEFAULT_SERMON_LISTENER_SETTINGS, DEFAULT_SERMON_TRANSCRIBER_SETTINGS } from "../shared/autoScripture"
 import type { API_metronome } from "./components/actions/api"
 
 // ----- TEMPORARY VARIABLES -----
@@ -289,7 +289,12 @@ export const autoScriptureStatus: Writable<AutoScriptureStatus> = writable({
     scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
     recognizedReferences: 0,
     httpEndpoints: [],
-    customEndpoints: DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints
+    customEndpoints: DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints,
+    transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
+    transcriberReady: false,
+    transcriberMessage: undefined,
+    transcriberSampleRate: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate,
+    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
 })
 export const autoScriptureSuggestions: Writable<AutoScriptureSuggestion[]> = writable([])
 export const autoScriptureTranscripts: Writable<AutoScriptureTranscriptEvent[]> = writable([])
