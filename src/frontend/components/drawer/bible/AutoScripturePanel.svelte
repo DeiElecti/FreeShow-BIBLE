@@ -620,6 +620,17 @@
             on:change={(e) => updateSetting("duplicateInterval", Number(e.detail))}
         />
         <MaterialNumberInput
+            label="scripture.auto_listener_context_window"
+            value={listenerSettings.contextWindow}
+            min={0}
+            max={120}
+            on:change={(e) =>
+                updateSetting(
+                    "contextWindow",
+                    Math.max(0, Math.min(120, Math.floor(Number(e.detail) || 0)))
+                )}
+        />
+        <MaterialNumberInput
             label="scripture.auto_listener_max_verses"
             value={listenerSettings.maxVerses}
             min={1}
@@ -638,6 +649,7 @@
             on:change={(e) => updateSetting("autoDisplay", e.detail)}
         />
     </div>
+    <p class="context-hint"><T id="scripture.auto_listener_context_hint" /></p>
 
     <div class="custom-endpoints">
         <div class="custom-header">
@@ -981,6 +993,12 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: 10px;
+    }
+
+    .context-hint {
+        margin: 0;
+        font-size: 0.75em;
+        opacity: 0.7;
     }
 
     .custom-endpoints {

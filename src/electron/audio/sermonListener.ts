@@ -50,6 +50,7 @@ let status: AutoScriptureStatus = {
     httpEndpoint: undefined,
     httpEndpoints: [],
     customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
+    contextWindow: DEFAULT_SERMON_LISTENER_SETTINGS.contextWindow,
     transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
     transcriberReady: false,
     transcriberMessage: undefined,
@@ -64,6 +65,7 @@ const parserAvailable = hasReferenceParser()
 let transcriber: SermonTranscriber | null = null
 const transcriptHistory: AutoScriptureTranscriptEvent[] = []
 const suggestionHistory: AutoScriptureSuggestion[] = []
+const transcriptContext: { text: string; timestamp: number }[] = []
 interface SseClient {
     id: string
     res: Response
@@ -73,6 +75,7 @@ const sseClients: Map<string, SseClient> = new Map()
 const SSE_HEARTBEAT_INTERVAL = 30000
 const TRANSCRIPT_HISTORY_LIMIT = 25
 const SUGGESTION_HISTORY_LIMIT = 25
+const TRANSCRIPT_CONTEXT_LIMIT = 12
 
 export function initializeSermonListener() {
     applySettings(readSettings())
@@ -149,6 +152,11 @@ function readSettings(): SermonListenerSettings {
 
     const transcriber = sanitizeTranscriberSettings((stored as any)?.transcriber)
 
+    const contextWindow =
+        typeof stored.contextWindow === "number" && stored.contextWindow >= 0
+            ? Math.min(120, Math.floor(stored.contextWindow))
+            : DEFAULT_SERMON_LISTENER_SETTINGS.contextWindow
+
     const sanitized: SermonListenerSettings = {
         enabled: stored.enabled ?? DEFAULT_SERMON_LISTENER_SETTINGS.enabled,
         autoDisplay: stored.autoDisplay ?? DEFAULT_SERMON_LISTENER_SETTINGS.autoDisplay,
@@ -157,6 +165,7 @@ function readSettings(): SermonListenerSettings {
         duplicateInterval: typeof stored.duplicateInterval === "number" && stored.duplicateInterval > 0 ? stored.duplicateInterval : DEFAULT_SERMON_LISTENER_SETTINGS.duplicateInterval,
         maxVerses: typeof stored.maxVerses === "number" && stored.maxVerses > 0 ? Math.max(1, Math.floor(stored.maxVerses)) : DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
         scriptureId: stored.scriptureId ?? DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
+        contextWindow,
         customEndpoints,
         transcriber
     }
@@ -176,9 +185,16 @@ function applySettings(newSettings: SermonListenerSettings) {
     status.maxVerses = settings.maxVerses
     status.scriptureId = settings.scriptureId
     status.customEndpoints = [...settings.customEndpoints]
+    status.contextWindow = settings.contextWindow
     status.transcriberEngine = settings.transcriber?.engine ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine
     status.transcriberSampleRate = settings.transcriber?.sampleRate ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate
     status.transcriberPartial = settings.transcriber?.enablePartial ?? DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial
+
+    if (settings.contextWindow <= 0) {
+        clearTranscriptContext()
+    } else {
+        pruneTranscriptContext(Date.now(), settings.contextWindow * 1000)
+    }
     if (!settings.enabled) {
         status.httpEndpoint = undefined
         status.httpEndpoints = []
@@ -338,6 +354,7 @@ function stopServer() {
     status.httpEndpoints = []
     status.customEndpoints = [...settings.customEndpoints]
     ensureTranscriber()?.setActive(false)
+    clearTranscriptContext()
 }
 
 interface ExternalIngestOptions {
@@ -378,6 +395,7 @@ function ingestExternalReferences({ reference, references, confidence, source, t
         }
         status.lastTranscriptAt = eventTimestamp
         sendTranscriptEvent(payload)
+        updateTranscriptContextBuffer(cleanTranscript, eventTimestamp)
         transcriptLogged = true
     }
 
@@ -519,6 +537,7 @@ function sanitizeNumber(value: unknown): number | null {
 
 function processTranscript({ text, confidence, speaker, timestamp, source }: TranscriptPayload) {
     const now = sanitizeTimestamp(timestamp)
+    const trimmedText = typeof text === "string" ? text.trim() : ""
 
     const payload = {
         text,
@@ -530,20 +549,46 @@ function processTranscript({ text, confidence, speaker, timestamp, source }: Tra
     status.lastTranscriptAt = now
     sendTranscriptEvent(payload)
 
-    if (!parserAvailable || !text || (typeof confidence === "number" && confidence < settings.minConfidence)) {
+    const aggregatedContext = updateTranscriptContextBuffer(trimmedText, now)
+
+    if (!parserAvailable || !trimmedText) {
         emitStatus()
         return
     }
 
-    const references = extractReferences(text, settings.maxVerses)
-    if (!references.length) {
+    if (typeof confidence === "number" && confidence < settings.minConfidence) {
+        emitStatus()
+        return
+    }
+
+    const parseTargets: string[] = []
+    if (trimmedText) parseTargets.push(trimmedText)
+    if (aggregatedContext && aggregatedContext !== trimmedText) parseTargets.push(aggregatedContext)
+
+    if (!parseTargets.length) {
+        emitStatus()
+        return
+    }
+
+    const uniqueReferences = new Map<string, AutoScriptureReference>()
+    parseTargets.forEach((target) => {
+        extractReferences(target, settings.maxVerses).forEach((reference) => {
+            const key = createReferenceKey(reference)
+            if (!key || uniqueReferences.has(key)) return
+            uniqueReferences.set(key, reference)
+        })
+    })
+
+    if (!uniqueReferences.size) {
         emitStatus()
         return
     }
 
     cleanupSeen(now)
 
-    references.forEach((reference) => {
+    const transcriptForSuggestion = aggregatedContext || trimmedText
+
+    uniqueReferences.forEach((reference) => {
         const key = createReferenceKey(reference)
         if (shouldSkipReference(key, now)) return
 
@@ -554,7 +599,7 @@ function processTranscript({ text, confidence, speaker, timestamp, source }: Tra
         const suggestion: AutoScriptureSuggestion = {
             id: typeof randomUUID === "function" ? randomUUID() : `${now}-${Math.random().toString(16).slice(2)}`,
             reference,
-            transcript: text,
+            transcript: transcriptForSuggestion || undefined,
             timestamp: now,
             confidence,
             source
@@ -698,6 +743,57 @@ function sendError(message: string, fatal = false) {
 function clearHistories() {
     transcriptHistory.length = 0
     suggestionHistory.length = 0
+    clearTranscriptContext()
+}
+
+function clearTranscriptContext() {
+    transcriptContext.length = 0
+}
+
+function pruneTranscriptContext(now: number, windowMs: number) {
+    for (let i = transcriptContext.length - 1; i >= 0; i--) {
+        if (now - transcriptContext[i].timestamp > windowMs) transcriptContext.splice(i, 1)
+    }
+
+    if (transcriptContext.length > TRANSCRIPT_CONTEXT_LIMIT) {
+        transcriptContext.splice(0, transcriptContext.length - TRANSCRIPT_CONTEXT_LIMIT)
+    }
+}
+
+function updateTranscriptContextBuffer(text: string, timestamp: number) {
+    const windowSeconds = Math.max(0, settings.contextWindow || 0)
+    const windowMs = windowSeconds * 1000
+
+    if (!windowSeconds) {
+        clearTranscriptContext()
+        return ""
+    }
+
+    pruneTranscriptContext(timestamp, windowMs)
+
+    if (text) {
+        const last = transcriptContext[transcriptContext.length - 1]
+        if (!last || last.text !== text) {
+            transcriptContext.push({ text, timestamp })
+            if (transcriptContext.length > TRANSCRIPT_CONTEXT_LIMIT) {
+                transcriptContext.splice(0, transcriptContext.length - TRANSCRIPT_CONTEXT_LIMIT)
+            }
+        } else {
+            transcriptContext[transcriptContext.length - 1].timestamp = timestamp
+        }
+    }
+
+    const combined = transcriptContext
+        .map((entry) => entry.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+
+    if (combined.length > 500) {
+        return combined.slice(combined.length - 500).trimStart()
+    }
+
+    return combined
 }
 
 function sanitizeTranscriptEvent(event: TranscriptPayload): AutoScriptureTranscriptEvent | null {

@@ -28,6 +28,8 @@ export interface SermonListenerSettings {
     maxVerses: number
     /** Optional scripture/collection identifier to use when showing references. */
     scriptureId: string
+    /** Number of seconds of transcript context used when searching for references. */
+    contextWindow: number
     /** Additional hostnames or proxy URLs that should be surfaced in the UI. */
     customEndpoints: string[]
     /** Configuration for the built-in speech-recognition engine. */
@@ -50,6 +52,7 @@ export const DEFAULT_SERMON_LISTENER_SETTINGS: SermonListenerSettings = {
     duplicateInterval: 45,
     maxVerses: 8,
     scriptureId: "",
+    contextWindow: 12,
     customEndpoints: [],
     transcriber: { ...DEFAULT_SERMON_TRANSCRIBER_SETTINGS }
 }
@@ -99,6 +102,7 @@ export interface AutoScriptureStatus {
     httpEndpoint?: string
     httpEndpoints?: AutoScriptureEndpoint[]
     customEndpoints: string[]
+    contextWindow: number
     transcriberEngine: SermonTranscriberEngine
     transcriberReady: boolean
     transcriberMessage?: string

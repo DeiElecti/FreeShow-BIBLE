@@ -290,6 +290,7 @@ export const autoScriptureStatus: Writable<AutoScriptureStatus> = writable({
     recognizedReferences: 0,
     httpEndpoints: [],
     customEndpoints: DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints,
+    contextWindow: DEFAULT_SERMON_LISTENER_SETTINGS.contextWindow,
     transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
     transcriberReady: false,
     transcriberMessage: undefined,
