@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createEventDispatcher } from "svelte"
+    import { createEventDispatcher, onDestroy } from "svelte"
     import type { AutoDetectedScripture } from "../../../../types/Scripture"
     import {
         scriptureAutoHistory,
@@ -23,6 +23,10 @@
         resetAutoScriptureSession,
         importAutoScriptureSession
     } from "../../../utils/scripture/autoService"
+    import {
+        formatAutoDisplayCountdown,
+        hasActiveAutoDisplayCountdown
+    } from "../../../utils/scripture/countdown"
     import {
         SCRIPTURE_AUTO_LANGUAGE_OPTIONS,
         getScriptureAutoLanguageLabel
@@ -104,6 +108,10 @@
     let remoteConnected = false
     let startButtonLabel = "Start listening"
     let isRemoteMode = false
+    let nextAutoId: string | null = null
+    let nextAutoAt: number | null = null
+    let autoCountdownLabel = ""
+    let countdownTimer: ReturnType<typeof setInterval> | null = null
     let dashboardSection: HTMLElement
     let queueSection: HTMLElement
     let historySection: HTMLElement
@@ -135,6 +143,8 @@
     $: remoteConnected = Boolean($scriptureAutoState.remoteConnected)
     $: remoteStatusMessage = $scriptureAutoState.remoteStatus || ""
     $: isRemoteMode = recognizerMode === "remote"
+    $: nextAutoId = $scriptureAutoState.nextAutoApplyId || null
+    $: nextAutoAt = $scriptureAutoState.nextAutoApplyAt || null
     $: {
         const statusLower = remoteStatusMessage.toLowerCase()
         const remoteBusy = statusLower.startsWith("connecting") || statusLower.startsWith("reconnecting")
@@ -425,6 +435,33 @@
         const precision = seconds % 1 === 0 ? 0 : 2
         return `${seconds.toFixed(precision)} s`
     }
+
+    function clearCountdownTimer() {
+        if (countdownTimer) {
+            clearInterval(countdownTimer)
+            countdownTimer = null
+        }
+    }
+
+    function refreshAutoCountdown() {
+        autoCountdownLabel = formatAutoDisplayCountdown(nextAutoAt, autoDisplay)
+        if (!hasActiveAutoDisplayCountdown(nextAutoAt, autoDisplay)) {
+            clearCountdownTimer()
+        }
+    }
+
+    $: {
+        const shouldTrackCountdown = Boolean(nextAutoId) && hasActiveAutoDisplayCountdown(nextAutoAt, autoDisplay)
+        if (shouldTrackCountdown) {
+            if (!countdownTimer) countdownTimer = setInterval(refreshAutoCountdown, 200)
+            refreshAutoCountdown()
+        } else {
+            clearCountdownTimer()
+            if (!shouldTrackCountdown) autoCountdownLabel = ""
+        }
+    }
+
+    onDestroy(() => clearCountdownTimer())
 
     function closePanel() {
         dispatch("close")
@@ -776,6 +813,9 @@
                                         <span class="meta confidence">{formatConfidence(item.confidence)}</span>
                                     {/if}
                                     <span class="meta">{formatTimestamp(item.createdAt)}</span>
+                                    {#if index === 0 && autoDisplay && autoCountdownLabel}
+                                        <span class="meta countdown">Auto in {autoCountdownLabel}</span>
+                                    {/if}
                                 </header>
                                 <p class="preview">{item.text}</p>
                                 <footer>
@@ -1359,6 +1399,11 @@
 
     .meta.confidence {
         color: var(--secondary, #ffd866);
+    }
+
+    .meta.countdown {
+        color: var(--secondary, #ffd866);
+        font-weight: 600;
     }
 
     .preview {

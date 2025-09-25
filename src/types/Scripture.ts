@@ -147,6 +147,9 @@ export interface ScriptureAutoState {
     recognizerMode: "browser" | "remote"
     remoteConnected: boolean
     remoteStatus: string | null
+    nextAutoApplyId: string | null
+    nextAutoApplyAt: number | null
+    nextAutoApplyDelayMs: number | null
 }
 
 export interface AutoTranscriptEntry {

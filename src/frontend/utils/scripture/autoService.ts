@@ -42,6 +42,8 @@ let activeScriptureId: string | null = null
 let autoApplyTimer: ReturnType<typeof setTimeout> | null = null
 let pendingAutoApplyId: string | null = null
 let pendingAutoApplyDelay = 0
+let pendingAutoApplyAt = 0
+let autoApplyStateActive = false
 let remoteSocket: WebSocket | null = null
 let remoteReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let remoteManualDisconnect = false
@@ -189,6 +191,12 @@ function buildSessionSnapshot() {
     const queue = cloneValue(get(scriptureAutoQueue))
     const history = cloneValue(get(scriptureAutoHistory))
     const transcript = cloneValue(get(scriptureAutoTranscript))
+
+    if (state) {
+        state.nextAutoApplyId = null
+        state.nextAutoApplyAt = null
+        state.nextAutoApplyDelayMs = null
+    }
 
     return {
         version: SESSION_EXPORT_VERSION,
@@ -363,6 +371,8 @@ function appendTranscriptEntry(text: string, source: string) {
 
 scriptureAutoState.subscribe((state) => {
     const nextId = state.activeBibleId || null
+    const bibleChanged = previousBibleId !== nextId
+
     activeBibleId = nextId
     activeScriptureId = state.activeScriptureId || null
 
@@ -371,7 +381,7 @@ scriptureAutoState.subscribe((state) => {
         return
     }
 
-    if (previousBibleId !== nextId) {
+    if (bibleChanged) {
         scriptureAutoQueue.update((items) => items.filter((item) => item.bibleId === nextId))
         clearProcessedReferences()
         previousBibleId = nextId
@@ -396,8 +406,10 @@ scriptureAutoState.subscribe((state) => {
         }
     }
 
-    sendRemoteConfiguration()
-    if (currentRecognizerMode === "browser") updateRecognitionGrammar()
+    if (bibleChanged) {
+        sendRemoteConfiguration()
+        if (currentRecognizerMode === "browser") updateRecognitionGrammar()
+    }
 })
 
 scriptureAutoSettings.subscribe((settings) => {
@@ -442,6 +454,15 @@ function clearAutoApplyTimer() {
     }
     pendingAutoApplyId = null
     pendingAutoApplyDelay = 0
+    pendingAutoApplyAt = 0
+    if (autoApplyStateActive) {
+        autoApplyStateActive = false
+        updateState({
+            nextAutoApplyId: null,
+            nextAutoApplyAt: null,
+            nextAutoApplyDelayMs: null
+        })
+    }
 }
 
 function applyConfidenceThreshold(minConfidence: number) {
@@ -888,12 +909,21 @@ function scheduleAutoApply(suggestion: AutoDetectedScripture | undefined) {
 
     clearAutoApplyTimer()
     const suggestionId = suggestion.id
+    const scheduledAt = Date.now() + delay
 
     pendingAutoApplyId = suggestionId
     pendingAutoApplyDelay = delay
+    pendingAutoApplyAt = scheduledAt
+    autoApplyStateActive = true
+    updateState({
+        nextAutoApplyId: suggestionId,
+        nextAutoApplyAt: scheduledAt,
+        nextAutoApplyDelayMs: delay
+    })
     autoApplyTimer = setTimeout(() => {
         pendingAutoApplyId = null
         pendingAutoApplyDelay = 0
+        pendingAutoApplyAt = 0
 
         const latestSettings = get(scriptureAutoSettings)
         if (!latestSettings.autoDisplay) {

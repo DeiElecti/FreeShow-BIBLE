@@ -105,7 +105,10 @@
             currentConfidence: null,
             recognizerMode: "browser",
             remoteConnected: false,
-            remoteStatus: null
+            remoteStatus: null,
+            nextAutoApplyId: null,
+            nextAutoApplyAt: null,
+            nextAutoApplyDelayMs: null
         })
         scriptureAutoStats.set({
             startedAt: Date.now(),

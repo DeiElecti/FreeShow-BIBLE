@@ -182,7 +182,10 @@ export const scriptureAutoState: Writable<ScriptureAutoState> = writable({
     currentConfidence: null,
     recognizerMode: "browser",
     remoteConnected: false,
-    remoteStatus: null
+    remoteStatus: null,
+    nextAutoApplyId: null,
+    nextAutoApplyAt: null,
+    nextAutoApplyDelayMs: null
 })
 export const scriptureAutoHistory: Writable<AutoDetectedScripture[]> = writable([])
 export const scriptureAutoTranscript: Writable<AutoTranscriptEntry[]> = writable([])

@@ -47,6 +47,10 @@
         applyAutoScriptureSuggestion,
         toggleAutoScriptureListening
     } from "../../../utils/scripture/autoService"
+    import {
+        formatAutoDisplayCountdown,
+        hasActiveAutoDisplayCountdown
+    } from "../../../utils/scripture/countdown"
 
     export let active: string | null
     export let bibles: Bible[]
@@ -224,6 +228,10 @@
     let autoListening = false
     let autoStatusText = ""
     let autoButtonTitle = `${AUTO_BUTTON_TITLE}. Shift+Click to toggle listening.`
+    let nextAutoApplyId: string | null = null
+    let nextAutoApplyAt: number | null = null
+    let autoCountdownLabel = ""
+    let autoCountdownTimer: ReturnType<typeof setInterval> | null = null
     let queueLength = 0
     let previousQueueLength = 0
     let autoDisplayEnabled = false
@@ -1040,13 +1048,50 @@
 
     $: queueLength = $scriptureAutoQueue.length
     $: autoDisplayEnabled = $scriptureAutoSettings.autoDisplay
+    $: nextAutoApplyId = $scriptureAutoState.nextAutoApplyId || null
+    $: nextAutoApplyAt = $scriptureAutoState.nextAutoApplyAt || null
     $: {
         if (!autoPanelOpen && !autoDisplayEnabled && queueLength > previousQueueLength) autoPanelOpen = true
         previousQueueLength = queueLength
     }
     $: autoListening = $scriptureAutoState.listening
     $: autoStatusText = ($scriptureAutoState.status || "").trim()
-    $: autoButtonTitle = `${AUTO_BUTTON_TITLE}${autoStatusText ? ` — ${autoStatusText}` : ""}. Shift+Click to toggle listening.`
+    $: {
+        const statusSuffix = autoStatusText ? ` — ${autoStatusText}` : ""
+        const countdownSuffix = autoDisplayEnabled && autoCountdownLabel
+            ? ` Next auto display in ${autoCountdownLabel}.`
+            : ""
+        autoButtonTitle = `${AUTO_BUTTON_TITLE}${statusSuffix}.${countdownSuffix} Shift+Click to toggle listening.`
+    }
+
+    function clearAutoCountdownTimer() {
+        if (autoCountdownTimer) {
+            clearInterval(autoCountdownTimer)
+            autoCountdownTimer = null
+        }
+    }
+
+    function refreshAutoCountdownLabel() {
+        autoCountdownLabel = formatAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)
+        if (!hasActiveAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)) {
+            clearAutoCountdownTimer()
+        }
+    }
+
+    $: {
+        const shouldTrackCountdown =
+            autoDisplayEnabled && Boolean(nextAutoApplyId) && hasActiveAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)
+
+        if (shouldTrackCountdown) {
+            if (!autoCountdownTimer) autoCountdownTimer = setInterval(refreshAutoCountdownLabel, 200)
+            refreshAutoCountdownLabel()
+        } else {
+            clearAutoCountdownTimer()
+            if (!shouldTrackCountdown) autoCountdownLabel = ""
+        }
+    }
+
+    onDestroy(() => clearAutoCountdownTimer())
 
     $: currentHistory = clone($scriptureHistory.filter((a) => a.id === bibles[0]?.id)).reverse()
 
@@ -1432,6 +1477,9 @@
                 {#if queueLength}
                     <span class="badge">{queueLength}</span>
                 {/if}
+                {#if autoDisplayEnabled && autoCountdownLabel}
+                    <span class="countdown-badge">{autoCountdownLabel}</span>
+                {/if}
             </span>
         </MaterialButton>
 
@@ -1498,6 +1546,17 @@
         font-weight: 700;
         min-width: 16px;
         text-align: center;
+    }
+
+    .auto-toggle .countdown-badge {
+        position: absolute;
+        bottom: -10px;
+        right: -10px;
+        font-size: 0.65em;
+        background: rgba(0, 0, 0, 0.6);
+        color: var(--secondary);
+        padding: 1px 6px;
+        border-radius: 999px;
     }
 
     .main {
