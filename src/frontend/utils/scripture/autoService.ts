@@ -1,9 +1,15 @@
 import { get } from "svelte/store"
-import type { AutoDetectedScripture, ScriptureAutoState, ScriptureAutoSettings } from "../../../types/Scripture"
+import type {
+    AutoDetectedScripture,
+    ScriptureAutoState,
+    ScriptureAutoSettings,
+    ScriptureAutoStats
+} from "../../../types/Scripture"
 import {
     openScripture,
     playScripture,
     scriptureAutoQueue,
+    scriptureAutoHistory,
     scriptureAutoSettings,
     scriptureAutoState,
     scriptureAutoStats,
@@ -129,6 +135,70 @@ const FALLBACK_BOOK_NAMES = [
     "Revelation",
     "Revelations"
 ]
+
+const SESSION_EXPORT_VERSION = 1
+
+function createDefaultStats(): ScriptureAutoStats {
+    const startedAt = Date.now()
+    return {
+        startedAt,
+        lastUpdated: null,
+        detected: 0,
+        speechDetections: 0,
+        manualDetections: 0,
+        displayed: 0,
+        autoDisplayed: 0,
+        manualSubmissions: 0,
+        dismissed: 0,
+        confidenceSamples: 0,
+        averageConfidence: 0
+    }
+}
+
+function cloneValue<T>(value: T): T {
+    const globalStructuredClone = (globalThis as any).structuredClone as
+        | (<TValue>(value: TValue) => TValue)
+        | undefined
+
+    if (typeof globalStructuredClone === "function") {
+        try {
+            return globalStructuredClone(value)
+        } catch (error) {
+            console.warn("Failed to structuredClone value", error)
+        }
+    }
+
+    try {
+        return JSON.parse(JSON.stringify(value))
+    } catch (error) {
+        console.warn("Failed to deep clone value", error)
+        return value
+    }
+}
+
+function buildSessionSnapshot() {
+    const settings = cloneValue(get(scriptureAutoSettings))
+    const state = cloneValue(get(scriptureAutoState))
+    const stats = cloneValue(get(scriptureAutoStats))
+    const queue = cloneValue(get(scriptureAutoQueue))
+    const history = cloneValue(get(scriptureAutoHistory))
+    const transcript = cloneValue(get(scriptureAutoTranscript))
+
+    return {
+        version: SESSION_EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        recognizerMode: currentRecognizerMode,
+        listening: isListening,
+        remoteConnected,
+        status: statusMessage,
+        settings,
+        state,
+        stats,
+        queue,
+        history,
+        transcript
+    }
+}
 
 function sanitizeGrammarSource(value: unknown): string | null {
     if (value == null) return null
@@ -1157,6 +1227,80 @@ export function toggleAutoScriptureListening(force?: boolean) {
         stopAutoScriptureListening()
     } else {
         startAutoScriptureListening()
+    }
+}
+
+export function resetAutoScriptureSession() {
+    initializeAutoScriptureService()
+
+    clearAutoApplyTimer()
+    lastAutoAppliedId = null
+    pendingAutoApplyId = null
+    pendingAutoApplyDelay = 0
+
+    scriptureAutoQueue.set([])
+    scriptureAutoHistory.set([])
+    scriptureAutoTranscript.set([])
+    scriptureAutoStats.set(createDefaultStats())
+    clearProcessedReferences()
+
+    const status = currentRecognizerMode === "remote"
+        ? remoteConnected
+            ? "Session reset. Awaiting remote recognizer input."
+            : "Session reset. Connect the remote recognizer to continue."
+        : isListening
+        ? "Session reset. Listening for scripture references…"
+        : "Session reset. Start listening to capture new references."
+
+    updateState({
+        lastHeardAt: null,
+        lastReference: null,
+        lastSource: null,
+        lastText: null,
+        lastConfidence: null,
+        currentReference: null,
+        currentText: null,
+        currentTranslation: null,
+        currentAppliedAt: null,
+        currentSource: null,
+        currentAuto: false,
+        currentConfidence: null,
+        partialTranscript: ""
+    })
+
+    setStatus(status)
+}
+
+export function getAutoScriptureSessionSnapshot() {
+    initializeAutoScriptureService()
+    return buildSessionSnapshot()
+}
+
+export function exportAutoScriptureSession(): boolean {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+        setStatus("Session export is only available in the app.")
+        return false
+    }
+
+    try {
+        const snapshot = getAutoScriptureSessionSnapshot()
+        const json = JSON.stringify(snapshot, null, 2)
+        const blob = new Blob([json], { type: "application/json" })
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement("a")
+        link.href = url
+        link.download = `autoscripture-session-${timestamp}.json`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        setStatus("Session log exported.")
+        return true
+    } catch (error) {
+        console.error("Failed to export AutoScripture session", error)
+        setStatus("Unable to export the session log.")
+        return false
     }
 }
 

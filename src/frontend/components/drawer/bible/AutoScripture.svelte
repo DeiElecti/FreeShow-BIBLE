@@ -18,7 +18,9 @@
     } from "../../../utils/scripture/autoDetector"
     import {
         processAutoScriptureManualInput,
-        toggleAutoScriptureListening
+        toggleAutoScriptureListening,
+        exportAutoScriptureSession,
+        resetAutoScriptureSession
     } from "../../../utils/scripture/autoService"
     import {
         SCRIPTURE_AUTO_LANGUAGE_OPTIONS,
@@ -181,6 +183,21 @@
 
     function handleToggleClick() {
         toggleAutoScriptureListening()
+    }
+
+    function handleExportSession() {
+        exportAutoScriptureSession()
+    }
+
+    function handleResetSession() {
+        if (typeof window !== "undefined") {
+            const confirmed = window.confirm(
+                "Reset the detection session? This clears the queue, history, transcript, and stats."
+            )
+            if (!confirmed) return
+        }
+
+        resetAutoScriptureSession()
     }
 
     function submitManual() {
@@ -621,6 +638,20 @@
                             <span>Avg confidence</span>
                         </div>
                     </div>
+                </div>
+
+                <div class="card session-card">
+                    <div class="card-header">
+                        <h4>Session controls</h4>
+                        <span class="hint">Archive or reset this detection run.</span>
+                    </div>
+                    <div class="session-actions">
+                        <button class="primary" on:click={handleExportSession}>Export session log</button>
+                        <button class="danger" on:click={handleResetSession}>Reset session</button>
+                    </div>
+                    <p class="hint subtle">
+                        Resetting clears the queue, transcript, history, and statistics so you can start fresh.
+                    </p>
                 </div>
 
                 {#if recentHistory.length}
@@ -1139,6 +1170,26 @@
     .stat span {
         font-size: 0.75rem;
         opacity: 0.7;
+    }
+
+    .session-card .session-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .session-card .session-actions button {
+        flex: 0 0 auto;
+    }
+
+    button.danger {
+        background: rgba(239, 83, 80, 0.15);
+        color: #ffb4ad;
+        border: 1px solid rgba(239, 83, 80, 0.35);
+    }
+
+    button.danger:hover {
+        background: rgba(239, 83, 80, 0.25);
     }
 
     .recent-card ul,

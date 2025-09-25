@@ -129,6 +129,7 @@ Achieving sub-second latency requires careful tuning of each stage:
 - **Readable Typography:** Choose large font sizes (suitable for the room), with references (e.g., "John 3:16 [NIV]") shown near the verse. Break longer passages into multiple slides rather than shrinking text.
 - **Display Timing:** Keep verses visible while the pastor discusses them. Provide configurable auto-hide timers and manual controls for operators to clear or persist verses.
 - **Operator Override:** Offer a control panel that lists the last detected reference, allows manual confirmation/correction, toggles translations, and provides emergency hide/show actions. Give the queue drag-style affordances—buttons to set a suggestion as “Next”, move it up or down, or clear it entirely—so the operator can reorder upcoming verses to match the pastor’s emphasis.
+- **Session hygiene:** Provide quick actions to export the current session log (queue, transcript, stats) as JSON for follow-up analysis and to reset the detection pipeline between services. Clearing the state wipes the queue, transcript, and metrics so volunteers never carry stale data into the next gathering.
 - **Multi-Screen Support:** Support projecting to in-house displays and feeding overlays to live-streaming software (OBS, vMix, etc.).
 - **Visual Consistency:** Allow customization (fonts, colors, logos) to match the church's branding. Provide optional confidence monitor output so the pastor can verify what the congregation sees.
 
