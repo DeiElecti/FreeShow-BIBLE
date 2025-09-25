@@ -155,7 +155,8 @@ export const scriptureAutoSettings: Writable<ScriptureAutoSettings> = writable({
     autoStartListening: false,
     themeId: "classic",
     minimumConfidence: 0.55,
-    autoDisplayDelayMs: 0
+    autoDisplayDelayMs: 0,
+    languageOverrides: {}
 })
 export const scriptureAutoState: Writable<ScriptureAutoState> = writable({
     supported: true,

@@ -11,6 +11,7 @@ import {
     scriptures
 } from "../../stores"
 import { clearProcessedReferences, dismissSuggestion, ingestTranscript } from "./autoDetector"
+import { getScriptureAutoLanguageLabel } from "./languageOptions"
 
 let recognition: any = null
 let initializationAttempted = false
@@ -63,6 +64,24 @@ scriptureAutoState.subscribe((state) => {
         clearProcessedReferences()
         previousBibleId = nextId
         lastAutoAppliedId = null
+
+        const settings = get(scriptureAutoSettings)
+        const overrides = settings.languageOverrides || {}
+        const overrideLanguage = overrides[nextId] || null
+
+        if (overrideLanguage && settings.language !== overrideLanguage) {
+            scriptureAutoSettings.update((current) => {
+                if (current.language === overrideLanguage) return current
+                return { ...current, language: overrideLanguage }
+            })
+
+            const languageLabel = getScriptureAutoLanguageLabel(overrideLanguage)
+            setStatus(
+                languageLabel
+                    ? `Recognition language set to ${languageLabel} for this translation.`
+                    : "Recognition language updated for this translation."
+            )
+        }
     }
 })
 

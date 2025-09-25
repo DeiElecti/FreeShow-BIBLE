@@ -38,7 +38,7 @@ After transcription, the system must detect Bible references in the text. Instea
 
 Integration options include continuously scanning the ASR transcript buffer for valid references or parsing finalized sentences. Continuous scanning allows immediate detection but requires safeguards against false positives (e.g., verifying that chapter and verse numbers exist in the specified book).
 
-In practice, you can load language-specific BCV lexicons to mirror the spoken language. Our implementation dynamically swaps between English, Spanish, Portuguese, and French parser bundles depending on the operator's microphone language, while falling back to English when a manual typed reference needs parsing. This keeps detections accurate for multilingual congregations without blocking volunteers who still type references in English.
+In practice, you can load language-specific BCV lexicons to mirror the spoken language. Our implementation dynamically swaps between English, Spanish, Portuguese, and French parser bundles depending on the operator's microphone language, while falling back to English when a manual typed reference needs parsing. Operators can also remember a preferred recognition language per translation (for example, always pairing a Spanish Bible with a Spanish microphone locale). The software applies those saved overrides automatically whenever the matching translation is selected, so volunteers do not need to keep reconfiguring the microphone mid-service.
 
 ## Retrieving Verse Text from the Bible
 
@@ -94,7 +94,7 @@ Achieving sub-second latency requires careful tuning of each stage:
 - **Non-Distracting Presentation:** Use clear, high-contrast text on neutral or slightly transparent backgrounds. Subtle fade-in/out animations can make transitions smooth without distracting viewers.
 - **Readable Typography:** Choose large font sizes (suitable for the room), with references (e.g., "John 3:16 [NIV]") shown near the verse. Break longer passages into multiple slides rather than shrinking text.
 - **Display Timing:** Keep verses visible while the pastor discusses them. Provide configurable auto-hide timers and manual controls for operators to clear or persist verses.
-- **Operator Override:** Offer a control panel that lists the last detected reference, allows manual confirmation/correction, toggles translations, and provides emergency hide/show actions.
+- **Operator Override:** Offer a control panel that lists the last detected reference, allows manual confirmation/correction, toggles translations, and provides emergency hide/show actions. Give the queue drag-style affordances—buttons to set a suggestion as “Next”, move it up or down, or clear it entirely—so the operator can reorder upcoming verses to match the pastor’s emphasis.
 - **Multi-Screen Support:** Support projecting to in-house displays and feeding overlays to live-streaming software (OBS, vMix, etc.).
 - **Visual Consistency:** Allow customization (fonts, colors, logos) to match the church's branding. Provide optional confidence monitor output so the pastor can verify what the congregation sees.
 

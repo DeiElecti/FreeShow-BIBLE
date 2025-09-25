@@ -12,12 +12,18 @@
     import {
         clearProcessedReferences,
         clearSuggestionQueue,
-        dismissSuggestion
+        dismissSuggestion,
+        moveSuggestion,
+        moveSuggestionToTop
     } from "../../../utils/scripture/autoDetector"
     import {
         processAutoScriptureManualInput,
         toggleAutoScriptureListening
     } from "../../../utils/scripture/autoService"
+    import {
+        SCRIPTURE_AUTO_LANGUAGE_OPTIONS,
+        getScriptureAutoLanguageLabel
+    } from "../../../utils/scripture/languageOptions"
 
     export let bibleId: string
     export let bibleName: string = ""
@@ -63,6 +69,12 @@
     let activeNav = navItems[0].id
     let manualInput = ""
     let language = "en-US"
+    let languageOverrides: Record<string, string> = {}
+    let activeLanguageOverride: string | undefined
+    let hasLanguageOverride = false
+    let overrideLabel = ""
+    let overrideMatchesCurrent = false
+    let currentLanguageLabel = ""
     let autoDisplay = false
     let queue: AutoDetectedScripture[] = []
     let history: AutoDetectedScripture[] = []
@@ -85,6 +97,12 @@
     let settingsSection: HTMLElement
 
     $: language = $scriptureAutoSettings.language
+    $: languageOverrides = ($scriptureAutoSettings.languageOverrides || {}) as Record<string, string>
+    $: activeLanguageOverride = bibleId ? languageOverrides[bibleId] : undefined
+    $: hasLanguageOverride = Boolean(activeLanguageOverride)
+    $: overrideMatchesCurrent = Boolean(activeLanguageOverride && activeLanguageOverride === language)
+    $: overrideLabel = getScriptureAutoLanguageLabel(activeLanguageOverride)
+    $: currentLanguageLabel = getScriptureAutoLanguageLabel(language)
     $: autoDisplay = $scriptureAutoSettings.autoDisplay
     $: previewThemeId = $scriptureAutoSettings.themeId || previewThemes[0].id
     $: previewTheme = previewThemes.find((theme) => theme.id === previewThemeId) || previewThemes[0]
@@ -147,6 +165,18 @@
         dismissSuggestion(id)
     }
 
+    function moveSuggestionUp(id: string) {
+        moveSuggestion(id, "up")
+    }
+
+    function moveSuggestionDown(id: string) {
+        moveSuggestion(id, "down")
+    }
+
+    function setSuggestionAsNext(id: string) {
+        moveSuggestionToTop(id)
+    }
+
     function requeueHistory(item: AutoDetectedScripture) {
         processAutoScriptureManualInput(item.raw, item.bibleId)
     }
@@ -155,6 +185,45 @@
         const value = (event.target as HTMLSelectElement).value
         scriptureAutoSettings.update((settings) => ({ ...settings, language: value }))
         clearProcessedReferences()
+    }
+
+    function rememberLanguageForBible() {
+        if (!bibleId || !language) return
+
+        const label = getScriptureAutoLanguageLabel(language)
+        scriptureAutoSettings.update((settings) => {
+            const overrides = { ...(settings.languageOverrides || {}) }
+            if (overrides[bibleId] === language) return settings
+            overrides[bibleId] = language
+            return { ...settings, languageOverrides: overrides }
+        })
+
+        scriptureAutoState.update((state) => ({
+            ...state,
+            status: label
+                ? `Saved ${label} for ${bibleName || "this translation"}.`
+                : `Saved recognition language for ${bibleName || "this translation"}.`
+        }))
+    }
+
+    function clearLanguageOverride() {
+        if (!bibleId) return
+
+        let removed = false
+        scriptureAutoSettings.update((settings) => {
+            const overrides = { ...(settings.languageOverrides || {}) }
+            if (!overrides[bibleId]) return settings
+            delete overrides[bibleId]
+            removed = true
+            return { ...settings, languageOverrides: overrides }
+        })
+
+        if (!removed) return
+
+        scriptureAutoState.update((state) => ({
+            ...state,
+            status: `Cleared saved language for ${bibleName || "this translation"}.`
+        }))
     }
 
     function changeTheme(event: Event) {
@@ -331,13 +400,30 @@
                             <label class="select">
                                 <span>Language</span>
                                 <select value={language} on:change={changeLanguage} aria-label="Recognition language">
-                                    <option value="en-US">English (US)</option>
-                                    <option value="en-GB">English (UK)</option>
-                                    <option value="es-ES">Spanish</option>
-                                    <option value="pt-BR">Portuguese (BR)</option>
-                                    <option value="fr-FR">French</option>
+                                    {#each SCRIPTURE_AUTO_LANGUAGE_OPTIONS as option}
+                                        <option value={option.value}>{option.label}</option>
+                                    {/each}
                                 </select>
                             </label>
+                            {#if bibleId}
+                                <div class="language-override">
+                                    {#if hasLanguageOverride}
+                                        <span class="hint">
+                                            Saved: {overrideLabel || activeLanguageOverride}
+                                            {#if !overrideMatchesCurrent}
+                                                · applies when this translation is active
+                                            {/if}
+                                        </span>
+                                        <button class="text" on:click={clearLanguageOverride}>
+                                            Clear saved language
+                                        </button>
+                                    {:else}
+                                        <button class="text" on:click={rememberLanguageForBible}>
+                                            Remember {currentLanguageLabel || language} for this translation
+                                        </button>
+                                    {/if}
+                                </div>
+                            {/if}
                         {:else}
                             <p class="status error">{statusMessage}</p>
                         {/if}
@@ -515,10 +601,15 @@
                     </div>
 
                     {#if queue.length}
-                        {#each queue as item (item.id)}
-                            <article class="suggestion">
+                        {#each queue as item, index (item.id)}
+                            <article class="suggestion" class:next={index === 0}>
                                 <header>
-                                    <strong>{item.reference}</strong>
+                                    <div class="reference-row">
+                                        <strong>{item.reference}</strong>
+                                        {#if index === 0}
+                                            <span class="badge next-badge">Next</span>
+                                        {/if}
+                                    </div>
                                     <span class="meta">{item.translation}</span>
                                     {#if item.source}
                                         <span class="meta">{formatSourceLabel(item.source)}</span>
@@ -530,8 +621,33 @@
                                 </header>
                                 <p class="preview">{item.text}</p>
                                 <footer>
-                                    <button class="primary" on:click={() => applySuggestion(item, false)}>Display</button>
-                                    <button on:click={() => removeSuggestion(item.id)}>Dismiss</button>
+                                    <div class="queue-order">
+                                        {#if index > 0}
+                                            <button class="text" on:click={() => setSuggestionAsNext(item.id)}>
+                                                Set as next
+                                            </button>
+                                            <button
+                                                class="text icon-button"
+                                                on:click={() => moveSuggestionUp(item.id)}
+                                                aria-label="Move up in queue"
+                                            >
+                                                ↑
+                                            </button>
+                                        {/if}
+                                        {#if index < queue.length - 1}
+                                            <button
+                                                class="text icon-button"
+                                                on:click={() => moveSuggestionDown(item.id)}
+                                                aria-label="Move down in queue"
+                                            >
+                                                ↓
+                                            </button>
+                                        {/if}
+                                    </div>
+                                    <div class="suggestion-actions">
+                                        <button class="primary" on:click={() => applySuggestion(item, false)}>Display</button>
+                                        <button on:click={() => removeSuggestion(item.id)}>Dismiss</button>
+                                    </div>
                                 </footer>
                             </article>
                         {/each}
@@ -968,6 +1084,18 @@
         gap: 12px;
     }
 
+    .language-override {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .language-override .hint {
+        font-size: 0.8rem;
+        opacity: 0.75;
+    }
+
     .queue-header {
         display: flex;
         align-items: center;
@@ -992,11 +1120,22 @@
         gap: 10px;
     }
 
+    .suggestion.next {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    }
+
     .suggestion header {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
         align-items: baseline;
+    }
+
+    .reference-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
     }
 
     .suggestion header strong {
@@ -1020,7 +1159,50 @@
 
     .suggestion footer {
         display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .queue-order {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .suggestion-actions {
+        display: flex;
         gap: 10px;
+        align-items: center;
+    }
+
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        background: rgba(255, 255, 255, 0.12);
+    }
+
+    .next-badge {
+        background: var(--secondary, #ffd866);
+        color: #151515;
+    }
+
+    .icon-button {
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+    }
+
+    .icon-button:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.1);
     }
 
     button.text {

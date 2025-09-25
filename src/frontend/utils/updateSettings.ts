@@ -319,7 +319,13 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
             autoDisplayDelayMs:
                 typeof v?.autoDisplayDelayMs === "number" && Number.isFinite(v.autoDisplayDelayMs)
                     ? Math.min(Math.max(v.autoDisplayDelayMs, 0), 15000)
-                    : 0
+                    : 0,
+            languageOverrides: Object.fromEntries(
+                Object.entries(v?.languageOverrides || {}).filter((entry) => {
+                    const [key, value] = entry
+                    return typeof key === "string" && typeof value === "string" && key
+                })
+            )
         }),
     slidesOptions: (v: any) => slidesOptions.set(v),
     splitLines: (v: any) => splitLines.set(v),

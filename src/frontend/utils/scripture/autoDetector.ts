@@ -607,3 +607,49 @@ export function clearSuggestionQueue() {
     scriptureAutoQueue.set([])
     clearProcessedReferences()
 }
+
+function repositionQueue(
+    queue: AutoDetectedScripture[],
+    fromIndex: number,
+    toIndex: number
+): AutoDetectedScripture[] {
+    if (fromIndex === toIndex) return queue
+
+    const boundedFrom = Math.min(Math.max(fromIndex, 0), queue.length - 1)
+    const boundedTo = Math.min(Math.max(toIndex, 0), queue.length - 1)
+    if (boundedFrom === boundedTo) return queue
+
+    const next = [...queue]
+    const [item] = next.splice(boundedFrom, 1)
+    if (!item) return queue
+    next.splice(boundedTo, 0, item)
+    return next
+}
+
+export function moveSuggestion(id: string, direction: "up" | "down") {
+    scriptureAutoQueue.update((queue) => {
+        const index = queue.findIndex((item) => item.id === id)
+        if (index === -1) return queue
+
+        const targetIndex = direction === "up" ? index - 1 : index + 1
+        if (targetIndex < 0 || targetIndex >= queue.length) return queue
+
+        return repositionQueue(queue, index, targetIndex)
+    })
+}
+
+export function moveSuggestionToTop(id: string) {
+    scriptureAutoQueue.update((queue) => {
+        const index = queue.findIndex((item) => item.id === id)
+        if (index <= 0) return queue
+        return repositionQueue(queue, index, 0)
+    })
+}
+
+export function moveSuggestionToBottom(id: string) {
+    scriptureAutoQueue.update((queue) => {
+        const index = queue.findIndex((item) => item.id === id)
+        if (index === -1 || index === queue.length - 1) return queue
+        return repositionQueue(queue, index, queue.length - 1)
+    })
+}

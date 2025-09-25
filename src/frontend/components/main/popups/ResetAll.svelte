@@ -78,7 +78,8 @@
             autoStartListening: false,
             themeId: "classic",
             minimumConfidence: 0.55,
-            autoDisplayDelayMs: 0
+            autoDisplayDelayMs: 0,
+            languageOverrides: {}
         })
         scriptureAutoState.set({
             supported: true,

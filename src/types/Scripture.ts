@@ -119,6 +119,7 @@ export interface ScriptureAutoSettings {
     themeId: string
     minimumConfidence: number
     autoDisplayDelayMs: number
+    languageOverrides?: Record<string, string>
 }
 
 export interface ScriptureAutoState {
