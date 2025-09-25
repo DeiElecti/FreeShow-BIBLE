@@ -1,6 +1,7 @@
 import type { OpusEncoder as TOpusEncoder } from "@discordjs/opus"
 import { NdiSender } from "../ndi/NdiSender"
 import { getServerData, toServer } from "../servers"
+import { submitAudioBuffer } from "./sermonListener"
 
 // const isStopping = false
 const channelCount2 = 2
@@ -30,6 +31,7 @@ export async function processAudio(buffer: Buffer) {
         return
     }
 
+    submitAudioBuffer(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
     await NdiSender.sendAudioBufferNDI(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
     sendAudioToOutputServer(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
 }

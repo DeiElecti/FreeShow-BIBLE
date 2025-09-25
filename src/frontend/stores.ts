@@ -19,6 +19,8 @@ import type { AudioChannel, AudioStream, Playlist } from "./../types/Audio"
 import type { Outputs } from "./../types/Output"
 import type { DrawerTabIds } from "./../types/Tabs"
 import type { AudioData } from "./audio/audioPlayer"
+import type { AutoScriptureStatus, AutoScriptureSuggestion, AutoScriptureTranscriptEvent } from "../shared/autoScripture"
+import { DEFAULT_SERMON_LISTENER_SETTINGS, DEFAULT_SERMON_TRANSCRIBER_SETTINGS } from "../shared/autoScripture"
 import type { API_metronome } from "./components/actions/api"
 
 // ----- TEMPORARY VARIABLES -----
@@ -276,6 +278,35 @@ export const sorted: Writable<any> = writable({}) // {}
 export const dataPath: Writable<string> = writable("") // ""
 export const lockedOverlays: Writable<string[]> = writable([]) // []
 export const special: Writable<any> = writable({}) // {}
+export const autoScriptureStatus: Writable<AutoScriptureStatus> = writable({
+    enabled: DEFAULT_SERMON_LISTENER_SETTINGS.enabled,
+    listening: false,
+    port: DEFAULT_SERMON_LISTENER_SETTINGS.port,
+    autoDisplay: DEFAULT_SERMON_LISTENER_SETTINGS.autoDisplay,
+    minConfidence: DEFAULT_SERMON_LISTENER_SETTINGS.minConfidence,
+    duplicateInterval: DEFAULT_SERMON_LISTENER_SETTINGS.duplicateInterval,
+    maxVerses: DEFAULT_SERMON_LISTENER_SETTINGS.maxVerses,
+    scriptureId: DEFAULT_SERMON_LISTENER_SETTINGS.scriptureId,
+    recognizedReferences: 0,
+    lastTranscriptAt: undefined,
+    lastSuggestionAt: undefined,
+    lastTriggerAt: undefined,
+    httpEndpoint: undefined,
+    httpEndpoints: [],
+    customEndpoints: [...DEFAULT_SERMON_LISTENER_SETTINGS.customEndpoints],
+    contextWindow: DEFAULT_SERMON_LISTENER_SETTINGS.contextWindow,
+    authRequired: false,
+    corsEnabled: false,
+    corsOrigins: [...DEFAULT_SERMON_LISTENER_SETTINGS.corsOrigins],
+    transcriberEngine: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.engine,
+    transcriberReady: false,
+    transcriberMessage: undefined,
+    transcriberSampleRate: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.sampleRate,
+    transcriberPartial: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.enablePartial,
+    transcriberAlternatives: DEFAULT_SERMON_TRANSCRIBER_SETTINGS.maxAlternatives
+})
+export const autoScriptureSuggestions: Writable<AutoScriptureSuggestion[]> = writable([])
+export const autoScriptureTranscripts: Writable<AutoScriptureTranscriptEvent[]> = writable([])
 
 // SETTINGS
 export const language: Writable<string> = writable("en") // get locale

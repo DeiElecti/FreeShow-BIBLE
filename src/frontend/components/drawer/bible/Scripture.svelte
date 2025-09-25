@@ -37,6 +37,7 @@
     import TextInput from "../../inputs/TextInput.svelte"
     import Loader from "../../main/Loader.svelte"
     import Center from "../../system/Center.svelte"
+    import AutoScripturePanel from "./AutoScripturePanel.svelte"
     import { bookIds, fetchBible, formatBibleText, getColorCode, getVersePartLetter, joinRange, loadBible, receiveBibleContent, searchBibleAPI, setBooksCache, splitText } from "./scripture"
 
     export let active: string | null
@@ -1001,6 +1002,7 @@
 
 <div class="scroll" style="flex: 1;overflow-y: auto;">
     <div class="main">
+        <AutoScripturePanel />
         {#if notLoaded || !bibles[0]}
             <Center faded>
                 <T id="error.bible" />

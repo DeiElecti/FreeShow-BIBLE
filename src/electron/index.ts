@@ -7,6 +7,7 @@ import { AUDIO, CLOUD, EXPORT, MAIN, NDI, OUTPUT, RECORDER, STARTUP } from "../t
 import { Main } from "../types/IPC/Main"
 import type { Dictionary } from "../types/Settings"
 import { receiveAudio } from "./audio/receiveAudio"
+import { initializeSermonListener } from "./audio/sermonListener"
 import { cloudConnect } from "./cloud/cloud"
 import { startExport } from "./data/export"
 import { config, updateDataPath } from "./data/store"
@@ -90,6 +91,12 @@ async function startApp() {
     Promise.resolve()
         .then(() => {
             require("./servers")
+        })
+        .catch(console.error)
+
+    Promise.resolve()
+        .then(() => {
+            initializeSermonListener()
         })
         .catch(console.error)
 

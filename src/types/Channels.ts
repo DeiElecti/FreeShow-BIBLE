@@ -14,9 +14,10 @@ export const RECORDER = "RECORDER"
 export const NDI = "NDI"
 export const BLACKMAGIC = "BLACKMAGIC"
 export const AUDIO = "AUDIO"
+export const SCRIPTURE_AUTO = "SCRIPTURE_AUTO"
 export const API_DATA = "API_DATA"
 
-export type ValidChannels = "STARTUP" | "MAIN" | "OUTPUT" | "EXPORT" | "REMOTE" | "STAGE" | "CONTROLLER" | "OUTPUT_STREAM" | "CLOUD" | "RECORDER" | "NDI" | "BLACKMAGIC" | "AUDIO" | "API_DATA"
+export type ValidChannels = "STARTUP" | "MAIN" | "OUTPUT" | "EXPORT" | "REMOTE" | "STAGE" | "CONTROLLER" | "OUTPUT_STREAM" | "CLOUD" | "RECORDER" | "NDI" | "BLACKMAGIC" | "AUDIO" | "SCRIPTURE_AUTO" | "API_DATA"
 
 export type Data = string | DataObject
 export interface DataObject {
