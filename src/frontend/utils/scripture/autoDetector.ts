@@ -1,4 +1,7 @@
-import { bcv_parser } from "bible-passage-reference-parser/js/en_bcv_parser"
+import { bcv_parser as en_bcv_parser } from "bible-passage-reference-parser/js/en_bcv_parser"
+import { bcv_parser as es_bcv_parser } from "bible-passage-reference-parser/js/es_bcv_parser"
+import { bcv_parser as fr_bcv_parser } from "bible-passage-reference-parser/js/fr_bcv_parser"
+import { bcv_parser as pt_bcv_parser } from "bible-passage-reference-parser/js/pt_bcv_parser"
 import { get } from "svelte/store"
 import type { AutoDetectedScripture } from "../../../types/Scripture"
 import type { Bible } from "../../../types/Bible"
@@ -15,12 +18,76 @@ interface DetectionOptions {
     source?: string
 }
 
-const parser = new bcv_parser()
-const translationInfo = parser.translation_info()
-const BOOK_ORDER_MAP: Record<string, number> = {}
-Object.entries(translationInfo.order).forEach(([key, value]) => {
-    if (value >= 1 && value <= 66) BOOK_ORDER_MAP[key.toLowerCase()] = value
-})
+type ParserConstructor = new () => any
+
+interface ParserTranslationInfo {
+    books: string[]
+    order: Record<string, number>
+}
+
+interface ParserBundle {
+    key: string
+    Parser: ParserConstructor
+    translationInfo: ParserTranslationInfo
+    bookOrderMap: Record<string, number>
+}
+
+const DEFAULT_PARSER_KEY = "en"
+
+const LANGUAGE_TO_PARSER_KEY: Record<string, string> = {
+    en: "en",
+    "en-us": "en",
+    "en-gb": "en",
+    es: "es",
+    "es-es": "es",
+    "es-mx": "es",
+    pt: "pt",
+    "pt-br": "pt",
+    fr: "fr",
+    "fr-fr": "fr",
+    "fr-ca": "fr"
+}
+
+function createParserBundle(key: string, Parser: ParserConstructor): ParserBundle {
+    const parserInstance = new Parser()
+    let info: ParserTranslationInfo = { books: [], order: {} }
+
+    try {
+        const translation = parserInstance.translation_info?.() || {}
+        const books = Array.isArray(translation.books) ? [...translation.books] : []
+        const order = typeof translation.order === "object" && translation.order ? translation.order : {}
+        info = { books, order }
+    } catch (error) {
+        info = { books: [], order: {} }
+    }
+
+    const map: Record<string, number> = {}
+    Object.entries(info.order).forEach(([bookCode, index]) => {
+        if (typeof index === "number") map[bookCode.toLowerCase()] = index
+    })
+
+    return { key, Parser, translationInfo: info, bookOrderMap: map }
+}
+
+const PARSER_BUNDLES: Record<string, ParserBundle> = {
+    en: createParserBundle("en", en_bcv_parser),
+    es: createParserBundle("es", es_bcv_parser),
+    fr: createParserBundle("fr", fr_bcv_parser),
+    pt: createParserBundle("pt", pt_bcv_parser)
+}
+
+function resolveParserBundle(language?: string): ParserBundle {
+    if (!language) return PARSER_BUNDLES[DEFAULT_PARSER_KEY]
+
+    const normalized = language.toLowerCase()
+    const direct = LANGUAGE_TO_PARSER_KEY[normalized]
+    if (direct && PARSER_BUNDLES[direct]) return PARSER_BUNDLES[direct]
+
+    const base = LANGUAGE_TO_PARSER_KEY[normalized.split("-")[0]]
+    if (base && PARSER_BUNDLES[base]) return PARSER_BUNDLES[base]
+
+    return PARSER_BUNDLES[DEFAULT_PARSER_KEY]
+}
 
 const processedReferences = new Map<string, number>()
 const lastContext = new Map<string, { bookNumber: number; chapter: number }>()
@@ -92,9 +159,25 @@ function hasChapter(bible: Bible, bookNumber: number, chapterNumber: number): bo
     return verses.length > 0
 }
 
-function getReferenceName(bible: Bible, bookNumber: number): string {
+function formatBookFallback(code: string | undefined): string {
+    if (!code) return ""
+    return code
+        .replace(/_/g, " ")
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replace(/^(\d)([A-Za-z])/, "$1 $2")
+}
+
+function getReferenceName(
+    bible: Bible,
+    bookNumber: number,
+    translationInfo: ParserTranslationInfo
+): string {
     const referenceBook = bible.books?.find((b) => b.number === bookNumber)
-    return referenceBook?.customName || referenceBook?.name || translationInfo.books[bookNumber - 1] || ""
+    if (referenceBook?.customName) return referenceBook.customName
+    if (referenceBook?.name) return referenceBook.name
+
+    const fallback = translationInfo?.books?.[bookNumber - 1]
+    return formatBookFallback(fallback)
 }
 
 function pruneProcessedReferences(now: number, dedupeWindow: number) {
@@ -108,6 +191,7 @@ interface RegisterRuntime {
     dedupeWindow: number
     existingKeys: Set<string>
     minConfidence: number
+    translationInfo: ParserTranslationInfo
 }
 
 interface RegisterInfo {
@@ -144,7 +228,7 @@ function registerSuggestion(info: RegisterInfo, runtime: RegisterRuntime): AutoD
     const verseData = collectVerses(info.bible, bookNumber, chapterNumber, startVerse, endVerse)
     if (!verseData) return null
 
-    const referenceName = getReferenceName(info.bible, bookNumber)
+    const referenceName = getReferenceName(info.bible, bookNumber, runtime.translationInfo)
     if (!referenceName) return null
 
     const verseStartNumber = parseInt(verseData.verses[0], 10)
@@ -334,6 +418,81 @@ function detectContextualReferences(text: string, context: ContextRuntime): Auto
     return results
 }
 
+interface DetectRequest {
+    text: string
+    raw: string
+    bibleId: string
+    bible: Bible
+    translationName: string
+    bundle: ParserBundle
+    runtime: RegisterRuntime
+    source: string
+}
+
+function detectWithBundle(request: DetectRequest): AutoDetectedScripture[] {
+    const suggestions: AutoDetectedScripture[] = []
+    const parserInstance = new request.bundle.Parser()
+
+    let parsed: any[] = []
+    try {
+        parsed = parserInstance.parse(request.text).parsed_entities()
+    } catch (error) {
+        return suggestions
+    }
+
+    parsed.forEach((match) => {
+        const entity = match.entities?.[0]
+        if (!entity?.start?.b || !entity.start.c) return
+
+        if (entity.end?.c && entity.start.c !== entity.end.c) return
+
+        const bookCode = String(entity.start.b || "").toLowerCase()
+        const bookNumber = request.bundle.bookOrderMap[bookCode]
+        if (!bookNumber) return
+
+        const chapterNumber = entity.start.c
+        const startVerse = entity.start.v || 1
+        const endVerse = entity.end?.v || entity.start.v || 1
+
+        const suggestion = registerSuggestion(
+            {
+                bible: request.bible,
+                translationName: request.translationName,
+                bibleId: request.bibleId,
+                bookNumber,
+                chapterNumber,
+                startVerse,
+                endVerse,
+                raw: request.raw,
+                source: request.source,
+                osis: match.osis,
+                confidence: 0.95
+            },
+            request.runtime
+        )
+
+        if (suggestion) suggestions.push(suggestion)
+    })
+
+    const contextDetails = lastContext.get(request.bibleId)
+    if (contextDetails) {
+        const contextSuggestions = detectContextualReferences(request.text, {
+            bible: request.bible,
+            bibleId: request.bibleId,
+            bookNumber: contextDetails.bookNumber,
+            chapter: contextDetails.chapter,
+            translationName: request.translationName,
+            source: request.source,
+            raw: request.raw,
+            runtime: request.runtime
+        })
+
+        if (contextSuggestions.length) suggestions.push(...contextSuggestions)
+    }
+
+    return suggestions
+}
+
 export function ingestTranscript(rawText: string, bibleId: string, options: DetectionOptions = {}): AutoDetectedScripture[] {
     const trimmed = (rawText || "").replace(/\s+/g, " ").trim()
     if (!trimmed) return []
@@ -356,69 +515,43 @@ export function ingestTranscript(rawText: string, bibleId: string, options: Dete
         existingQueue.map((item) => buildQueueKey(item.bibleId, item.bookNumber, item.chapter, item.verseStart, item.verseEnd))
     )
 
-    const minimumConfidence = Math.min(
-        Math.max(settings?.minimumConfidence ?? 0.55, 0),
-        0.99
-    )
+    const minimumConfidence = Math.min(Math.max(settings?.minimumConfidence ?? 0.55, 0), 0.99)
+    const parserBundle = resolveParserBundle(settings?.language)
+    const source = options.source || "speech"
 
-    const runtime: RegisterRuntime = { dedupeWindow, existingKeys, minConfidence: minimumConfidence }
-    const suggestions: AutoDetectedScripture[] = []
+    const baseRuntime = { dedupeWindow, existingKeys, minConfidence: minimumConfidence }
 
-    const parsed = parser.parse(trimmed).parsed_entities()
-    parsed.forEach((match) => {
-        const entity = match.entities?.[0]
-        if (!entity?.start?.b || !entity.start.c) return
-
-        if (entity.end?.c && entity.start.c !== entity.end.c) return
-
-        const bookCode = entity.start.b.toLowerCase()
-        const bookNumber = BOOK_ORDER_MAP[bookCode]
-        if (!bookNumber) return
-
-        const chapterNumber = entity.start.c
-        const startVerse = entity.start.v || 1
-        const endVerse = entity.end?.v || entity.start.v || 1
-
-        const suggestion = registerSuggestion(
-            {
-                bible,
-                translationName,
-                bibleId,
-                bookNumber,
-                chapterNumber,
-                startVerse,
-                endVerse,
-                raw: trimmed,
-                source: options.source || "speech",
-                osis: match.osis,
-                confidence: 0.95
-            },
-            runtime
-        )
-
-        if (suggestion) suggestions.push(suggestion)
+    const suggestionsPrimary = detectWithBundle({
+        text: trimmed,
+        raw: trimmed,
+        bibleId,
+        bible,
+        translationName,
+        bundle: parserBundle,
+        runtime: { ...baseRuntime, translationInfo: parserBundle.translationInfo },
+        source
     })
 
-    const contextDetails = lastContext.get(bibleId)
-    if (contextDetails) {
-        const contextSuggestions = detectContextualReferences(trimmed, {
-            bible,
-            bibleId,
-            bookNumber: contextDetails.bookNumber,
-            chapter: contextDetails.chapter,
-            translationName,
-            source: options.source || "speech",
-            raw: trimmed,
-            runtime
-        })
+    let suggestions = suggestionsPrimary
 
-        if (contextSuggestions.length) suggestions.push(...contextSuggestions)
+    if (!suggestions.length && source === "manual" && parserBundle.key !== DEFAULT_PARSER_KEY) {
+        const fallbackBundle = PARSER_BUNDLES[DEFAULT_PARSER_KEY]
+        suggestions = detectWithBundle({
+            text: trimmed,
+            raw: trimmed,
+            bibleId,
+            bible,
+            translationName,
+            bundle: fallbackBundle,
+            runtime: { ...baseRuntime, translationInfo: fallbackBundle.translationInfo },
+            source
+        })
     }
 
     if (!suggestions.length) return []
 
     recordHistoryEntries(suggestions)
-    updateDetectionStats(suggestions, options.source || "speech")
+    updateDetectionStats(suggestions, source)
 
     scriptureAutoQueue.update((queue) => {
         const combined = [...suggestions, ...queue]

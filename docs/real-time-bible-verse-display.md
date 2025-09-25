@@ -38,6 +38,8 @@ After transcription, the system must detect Bible references in the text. Instea
 
 Integration options include continuously scanning the ASR transcript buffer for valid references or parsing finalized sentences. Continuous scanning allows immediate detection but requires safeguards against false positives (e.g., verifying that chapter and verse numbers exist in the specified book).
 
+In practice, you can load language-specific BCV lexicons to mirror the spoken language. Our implementation dynamically swaps between English, Spanish, Portuguese, and French parser bundles depending on the operator's microphone language, while falling back to English when a manual typed reference needs parsing. This keeps detections accurate for multilingual congregations without blocking volunteers who still type references in English.
+
 ## Retrieving Verse Text from the Bible
 
 Once the software recognizes a reference (for example, John 3:16) it must fetch the corresponding verse text—ideally supporting multiple translations.
