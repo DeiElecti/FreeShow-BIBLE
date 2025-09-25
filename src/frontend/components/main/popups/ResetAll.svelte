@@ -79,7 +79,9 @@
             themeId: "classic",
             minimumConfidence: 0.55,
             autoDisplayDelayMs: 0,
-            languageOverrides: {}
+            languageOverrides: {},
+            recognizerMode: "browser",
+            remoteServiceUrl: "",
         })
         scriptureAutoState.set({
             supported: true,
@@ -100,7 +102,10 @@
             currentAppliedAt: null,
             currentSource: null,
             currentAuto: false,
-            currentConfidence: null
+            currentConfidence: null,
+            recognizerMode: "browser",
+            remoteConnected: false,
+            remoteStatus: null
         })
         scriptureAutoStats.set({
             startedAt: Date.now(),

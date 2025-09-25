@@ -325,7 +325,9 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
                     const [key, value] = entry
                     return typeof key === "string" && typeof value === "string" && key
                 })
-            )
+            ),
+            recognizerMode: v?.recognizerMode === "remote" ? "remote" : "browser",
+            remoteServiceUrl: typeof v?.remoteServiceUrl === "string" ? v.remoteServiceUrl : ""
         }),
     slidesOptions: (v: any) => slidesOptions.set(v),
     splitLines: (v: any) => splitLines.set(v),

@@ -10,7 +10,12 @@ import {
     scriptureAutoTranscript,
     scriptures
 } from "../../stores"
-import { clearProcessedReferences, dismissSuggestion, ingestTranscript } from "./autoDetector"
+import {
+    clearProcessedReferences,
+    dismissSuggestion,
+    ingestExternalSuggestions,
+    ingestTranscript
+} from "./autoDetector"
 import { getScriptureAutoLanguageLabel } from "./languageOptions"
 
 let recognition: any = null
@@ -28,6 +33,19 @@ let activeScriptureId: string | null = null
 let autoApplyTimer: ReturnType<typeof setTimeout> | null = null
 let pendingAutoApplyId: string | null = null
 let pendingAutoApplyDelay = 0
+let remoteSocket: WebSocket | null = null
+let remoteReconnectTimer: ReturnType<typeof setTimeout> | null = null
+let remoteManualDisconnect = false
+let remoteReconnectAttempts = 0
+let lastRemoteConfig: { language: string | null; bibleId: string | null } = {
+    language: null,
+    bibleId: null
+}
+type RecognizerMode = "browser" | "remote"
+let currentRecognizerMode: RecognizerMode = "browser"
+let lastLanguage: string | null = null
+let remoteConnected = false
+let remoteStatusText: string | null = null
 
 const MAX_TRANSCRIPT_ITEMS = 200
 
@@ -83,6 +101,8 @@ scriptureAutoState.subscribe((state) => {
             )
         }
     }
+
+    sendRemoteConfiguration()
 })
 
 scriptureAutoSettings.subscribe((settings) => {
@@ -147,6 +167,24 @@ function updateState(partial: Partial<ScriptureAutoState>) {
     scriptureAutoState.update((state) => ({ ...state, ...partial }))
 }
 
+function setRecognizerMode(mode: RecognizerMode) {
+    if (currentRecognizerMode === mode) return
+    currentRecognizerMode = mode
+    updateState({ recognizerMode: mode })
+}
+
+function setRemoteConnectedState(value: boolean) {
+    if (remoteConnected === value) return
+    remoteConnected = value
+    updateState({ remoteConnected: value })
+}
+
+function setRemoteStatus(value: string | null) {
+    if (remoteStatusText === value) return
+    remoteStatusText = value
+    updateState({ remoteStatus: value })
+}
+
 function setStatus(message: string) {
     if (statusMessage === message) return
     statusMessage = message
@@ -167,6 +205,264 @@ function setSupportedState(value: boolean) {
 
 function setPartialTranscript(value: string) {
     updateState({ partialTranscript: value })
+}
+
+function clearRemoteReconnectTimer() {
+    if (remoteReconnectTimer) {
+        clearTimeout(remoteReconnectTimer)
+        remoteReconnectTimer = null
+    }
+}
+
+function resolveRecognizerMode(settings?: ScriptureAutoSettings): RecognizerMode {
+    const mode = settings?.recognizerMode
+    return mode === "remote" ? "remote" : "browser"
+}
+
+function getRemoteServiceUrl(settings?: ScriptureAutoSettings): string {
+    const value = settings?.remoteServiceUrl
+    if (typeof value === "string") return value.trim()
+    return ""
+}
+
+function sendRemoteConfiguration(force = false) {
+    if (!remoteSocket || remoteSocket.readyState !== WebSocket.OPEN) return
+
+    const settings = get(scriptureAutoSettings)
+    const language = (settings.language || "en-US").trim()
+    const bibleId = activeBibleId || null
+
+    if (!force && language === lastRemoteConfig.language && bibleId === lastRemoteConfig.bibleId) return
+
+    const translationMeta = bibleId ? get(scriptures)[bibleId] : null
+    const translationName =
+        translationMeta?.customName || translationMeta?.name || translationMeta?.metadata?.name || null
+
+    const payload: Record<string, unknown> = {
+        type: "configure",
+        language,
+        bibleId,
+        translation: translationName
+    }
+
+    try {
+        remoteSocket.send(JSON.stringify(payload))
+        lastRemoteConfig = { language, bibleId }
+    } catch (error) {
+        console.error("Failed to send remote configuration", error)
+    }
+}
+
+function processRemotePayload(raw: unknown) {
+    let payload: any = raw
+    if (typeof raw === "string") {
+        try {
+            payload = JSON.parse(raw)
+        } catch (error) {
+            console.error("Invalid remote payload", error)
+            return
+        }
+    }
+
+    if (!payload || typeof payload !== "object") return
+
+    const type = typeof payload.type === "string" ? payload.type.toLowerCase() : "transcript"
+    const sourceRaw = typeof payload.source === "string" ? payload.source.trim() : ""
+    const source = sourceRaw ? sourceRaw.toLowerCase() : "remote"
+
+    if (type === "transcript" || type === "partial" || type === "final") {
+        const text = String(payload.text ?? payload.transcript ?? "").trim()
+        if (!text) return
+
+        const confidence =
+            typeof payload.confidence === "number" && Number.isFinite(payload.confidence)
+                ? Math.max(0, Math.min(payload.confidence, 1))
+                : undefined
+        const bibleId = typeof payload.bibleId === "string" ? payload.bibleId : undefined
+        const isFinal = payload.isFinal ?? payload.final ?? type === "final"
+
+        if (isFinal) {
+            processSpeechTranscript(text, source, confidence, bibleId)
+            appendTranscriptEntry(text, source)
+            setPartialTranscript("")
+        } else {
+            setPartialTranscript(text)
+        }
+
+        return
+    }
+
+    if (type === "reference") {
+        const text = String(payload.reference ?? payload.text ?? "").trim()
+        if (!text) return
+
+        const bibleId = typeof payload.bibleId === "string" ? payload.bibleId : activeBibleId
+        if (!bibleId) return
+
+        appendTranscriptEntry(text, source)
+        const suggestions = ingestTranscript(text, bibleId, { source })
+        if (suggestions.length) {
+            recordDetections(suggestions, source)
+        }
+        return
+    }
+
+    if (type === "suggestion" || type === "suggestions") {
+        const items: any[] = []
+
+        if (Array.isArray(payload.suggestions)) items.push(...payload.suggestions)
+        if (Array.isArray(payload.items)) items.push(...payload.items)
+        if (Array.isArray(payload.data)) items.push(...payload.data)
+        if (payload.suggestion && typeof payload.suggestion === "object") items.push(payload.suggestion)
+        if (payload.item && typeof payload.item === "object") items.push(payload.item)
+
+        if (!items.length && type === "suggestion") {
+            items.push(payload)
+        }
+
+        const fallbackBibleId =
+            typeof payload.bibleId === "string" && payload.bibleId.trim() ? payload.bibleId.trim() : activeBibleId || undefined
+
+        const suggestions = ingestExternalSuggestions(items, {
+            bibleId: fallbackBibleId || undefined,
+            source
+        })
+
+        if (suggestions.length) {
+            recordDetections(suggestions, source)
+        }
+
+        return
+    }
+
+    if (type === "status") {
+        if (typeof payload.remoteStatus === "string") setRemoteStatus(payload.remoteStatus)
+        if (typeof payload.message === "string") setStatus(payload.message)
+        return
+    }
+
+    if (type === "error") {
+        if (typeof payload.remoteStatus === "string") setRemoteStatus(payload.remoteStatus)
+        const message = typeof payload.message === "string" ? payload.message : "Remote recognizer error."
+        setStatus(message)
+    }
+}
+
+function handleRemoteMessage(event: MessageEvent) {
+    const { data } = event
+
+    if (typeof data === "string") {
+        processRemotePayload(data)
+        return
+    }
+
+    if (data instanceof ArrayBuffer) {
+        processRemotePayload(new TextDecoder().decode(data))
+        return
+    }
+
+    if (typeof Blob !== "undefined" && data instanceof Blob) {
+        data.text().then(processRemotePayload).catch(() => {})
+    }
+}
+
+function connectRemoteRecognizer(): boolean {
+    const settings = get(scriptureAutoSettings)
+    const url = getRemoteServiceUrl(settings)
+
+    if (!url) {
+        setRemoteStatus("Configure remote recognizer URL")
+        setStatus("Configure a remote recognizer URL before connecting.")
+        setListeningState(false)
+        setRemoteConnectedState(false)
+        return false
+    }
+
+    if (remoteSocket && (remoteSocket.readyState === WebSocket.OPEN || remoteSocket.readyState === WebSocket.CONNECTING)) {
+        return true
+    }
+
+    clearRemoteReconnectTimer()
+    remoteManualDisconnect = false
+
+    try {
+        remoteSocket = new WebSocket(url)
+    } catch (error) {
+        console.error("Failed to open remote recognizer", error)
+        setRemoteStatus("Connection failed")
+        setStatus("Unable to connect to remote recognizer.")
+        setListeningState(false)
+        setRemoteConnectedState(false)
+        return false
+    }
+
+    setRemoteStatus("Connecting…")
+    setStatus("Connecting to remote recognizer…")
+
+    remoteSocket.onopen = () => {
+        remoteReconnectAttempts = 0
+        setRemoteConnectedState(true)
+        setRemoteStatus("Connected")
+        setListeningState(true)
+        setStatus("Connected to remote recognizer.")
+        lastRemoteConfig = { language: null, bibleId: null }
+        sendRemoteConfiguration(true)
+    }
+
+    remoteSocket.onerror = () => {
+        setRemoteStatus("Error")
+        setStatus("Remote recognizer reported an error.")
+    }
+
+    remoteSocket.onmessage = handleRemoteMessage
+
+    remoteSocket.onclose = () => {
+        setRemoteConnectedState(false)
+        setListeningState(false)
+        setPartialTranscript("")
+
+        if (remoteManualDisconnect) {
+            setRemoteStatus("Disconnected")
+            remoteManualDisconnect = false
+            return
+        }
+
+        if (shouldResume && !userPaused) {
+            remoteReconnectAttempts += 1
+            const delay = Math.min(10000, 1000 * Math.pow(2, remoteReconnectAttempts))
+            setRemoteStatus(`Reconnecting in ${Math.max(1, Math.round(delay / 1000))}s…`)
+            setStatus("Remote recognizer disconnected. Attempting to reconnect…")
+            clearRemoteReconnectTimer()
+            remoteReconnectTimer = setTimeout(() => {
+                remoteReconnectTimer = null
+                connectRemoteRecognizer()
+            }, delay)
+        } else {
+            setRemoteStatus("Disconnected")
+            setStatus("Remote recognizer disconnected.")
+        }
+    }
+
+    return true
+}
+
+function disconnectRemoteRecognizer(message?: string, manual = false) {
+    clearRemoteReconnectTimer()
+    remoteManualDisconnect = manual
+
+    if (remoteSocket) {
+        try {
+            remoteSocket.close()
+        } catch (error) {
+            console.error("Failed to close remote recognizer", error)
+        }
+    }
+
+    remoteSocket = null
+    setRemoteConnectedState(false)
+    setListeningState(false)
+    setRemoteStatus("Disconnected")
+    if (message) setStatus(message)
 }
 
 function recordDetections(suggestions: AutoDetectedScripture[], source: string) {
@@ -193,15 +489,36 @@ function recordDetections(suggestions: AutoDetectedScripture[], source: string) 
     return true
 }
 
-function processSpeechTranscript(text: string) {
-    const bibleId = activeBibleId
-    if (!bibleId) {
+function processSpeechTranscript(
+    text: string,
+    source: string = "speech",
+    transcriptConfidence?: number,
+    bibleOverride?: string
+) {
+    const targetBibleId = bibleOverride || activeBibleId
+    if (!targetBibleId) {
         if (!statusMessage) setStatus("Select a Bible translation to enable detection.")
         return
     }
 
-    const suggestions = ingestTranscript(text, bibleId, { source: "speech" })
-    if (suggestions.length) recordDetections(suggestions, "speech")
+    const suggestions = ingestTranscript(text, targetBibleId, { source })
+
+    if (
+        suggestions.length &&
+        typeof transcriptConfidence === "number" &&
+        Number.isFinite(transcriptConfidence)
+    ) {
+        const normalized = Math.max(0.35, Math.min(transcriptConfidence, 0.99))
+        suggestions.forEach((item) => {
+            if (typeof item.confidence === "number" && Number.isFinite(item.confidence)) {
+                item.confidence = Math.max(0.35, Math.min(0.99, (item.confidence + normalized) / 2))
+            } else {
+                item.confidence = normalized
+            }
+        })
+    }
+
+    if (suggestions.length) recordDetections(suggestions, source)
 }
 
 function scheduleAutoApply(suggestion: AutoDetectedScripture | undefined) {
@@ -393,18 +710,27 @@ function ensureRecognition(): boolean {
 
 function handleResult(event: any) {
     let finalTranscript = ""
+    let finalConfidence: number | undefined
     for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
         const transcript = result[0]?.transcript || ""
         if (result.isFinal) {
             finalTranscript += transcript + " "
+            const candidateConfidence = result[0]?.confidence
+            if (typeof candidateConfidence === "number" && Number.isFinite(candidateConfidence)) {
+                finalConfidence = candidateConfidence
+            }
         } else {
             setPartialTranscript(transcript)
         }
     }
 
     if (finalTranscript.trim()) {
-        processSpeechTranscript(finalTranscript.trim())
+        const normalizedConfidence =
+            typeof finalConfidence === "number" && Number.isFinite(finalConfidence)
+                ? Math.max(0, Math.min(finalConfidence, 1))
+                : undefined
+        processSpeechTranscript(finalTranscript.trim(), "speech", normalizedConfidence)
         setPartialTranscript("")
         appendTranscriptEntry(finalTranscript.trim(), "speech")
     }
@@ -414,10 +740,21 @@ export function initializeAutoScriptureService() {
     if (initializationAttempted) return
     initializationAttempted = true
 
-    if (!ensureRecognition()) return
-
     const settings = get(scriptureAutoSettings)
     previousAutoStart = settings.autoStartListening ?? false
+    lastLanguage = settings.language || "en-US"
+
+    const mode = resolveRecognizerMode(settings)
+    const previousMode = currentRecognizerMode
+    setRecognizerMode(mode)
+
+    if (mode === "browser") {
+        ensureRecognition()
+    } else {
+        if (previousMode !== mode) {
+            setSupportedState(true)
+        }
+    }
 
     handleSettingsChange(settings)
 
@@ -425,7 +762,20 @@ export function initializeAutoScriptureService() {
 }
 
 function handleSettingsChange(settings: ScriptureAutoSettings) {
-    if (recognition) recognition.lang = settings.language || "en-US"
+    const mode = resolveRecognizerMode(settings)
+    const previousMode = currentRecognizerMode
+    setRecognizerMode(mode)
+
+    const language = settings.language || "en-US"
+    if (mode === "browser") {
+        if (!recognition) ensureRecognition()
+        if (recognition) recognition.lang = language
+    }
+
+    if (language !== lastLanguage) {
+        lastLanguage = language
+        if (mode === "remote") sendRemoteConfiguration(true)
+    }
 
     const autoStart = settings.autoStartListening ?? false
     if (autoStart !== previousAutoStart) {
@@ -433,13 +783,50 @@ function handleSettingsChange(settings: ScriptureAutoSettings) {
         previousAutoStart = autoStart
     }
 
-    if (recognition && supported && autoStart && !isListening && !userPaused) {
-        startAutoScriptureListening()
+    if (!autoStart) {
+        shouldResume = false
+        userPaused = true
+    }
+
+    if (mode === "browser") {
+        if (previousMode === "remote") {
+            shouldResume = false
+            disconnectRemoteRecognizer("Switched to browser microphone.")
+        }
+
+        if (recognition && supported && autoStart && !isListening && !userPaused) {
+            startAutoScriptureListening()
+        }
+    } else {
+        setSupportedState(true)
+        if (previousMode === "browser" && recognition) {
+            try {
+                recognition.stop()
+            } catch (error) {
+                console.error("Failed to stop browser recognition", error)
+            }
+            setListeningState(false)
+        }
+
+        if (autoStart && !isListening && !userPaused) {
+            startAutoScriptureListening()
+        } else if (!autoStart) {
+            disconnectRemoteRecognizer(undefined, false)
+        }
     }
 }
 
 export function startAutoScriptureListening(): boolean {
     initializeAutoScriptureService()
+    const settings = get(scriptureAutoSettings)
+    const mode = resolveRecognizerMode(settings)
+
+    if (mode === "remote") {
+        shouldResume = true
+        userPaused = false
+        return connectRemoteRecognizer()
+    }
+
     if (!ensureRecognition()) return false
 
     if (isListening) {
@@ -468,6 +855,14 @@ export function stopAutoScriptureListening(message = "Microphone paused."): bool
     userPaused = true
     setStatus(message)
 
+    const settings = get(scriptureAutoSettings)
+    const mode = resolveRecognizerMode(settings)
+
+    if (mode === "remote") {
+        disconnectRemoteRecognizer(message, true)
+        return true
+    }
+
     if (!recognition) return false
 
     try {
@@ -490,8 +885,27 @@ export function toggleAutoScriptureListening(force?: boolean) {
         return
     }
 
-    if (isListening) stopAutoScriptureListening()
-    else startAutoScriptureListening()
+    const settings = get(scriptureAutoSettings)
+    const mode = resolveRecognizerMode(settings)
+    if (mode === "remote") {
+        const state = get(scriptureAutoState)
+        const status = (state.remoteStatus || "").toLowerCase()
+        const remoteBusy =
+            Boolean(state.remoteConnected) || status.startsWith("connecting") || status.startsWith("reconnecting")
+
+        if (remoteBusy || isListening) {
+            stopAutoScriptureListening("Remote recognizer paused.")
+        } else {
+            startAutoScriptureListening()
+        }
+        return
+    }
+
+    if (isListening) {
+        stopAutoScriptureListening()
+    } else {
+        startAutoScriptureListening()
+    }
 }
 
 export function processAutoScriptureManualInput(input: string, bibleId?: string) {

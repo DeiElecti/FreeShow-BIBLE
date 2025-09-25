@@ -120,6 +120,8 @@ export interface ScriptureAutoSettings {
     minimumConfidence: number
     autoDisplayDelayMs: number
     languageOverrides?: Record<string, string>
+    recognizerMode?: "browser" | "remote"
+    remoteServiceUrl?: string
 }
 
 export interface ScriptureAutoState {
@@ -142,6 +144,9 @@ export interface ScriptureAutoState {
     currentSource: string | null
     currentAuto: boolean
     currentConfidence: number | null
+    recognizerMode: "browser" | "remote"
+    remoteConnected: boolean
+    remoteStatus: string | null
 }
 
 export interface AutoTranscriptEntry {

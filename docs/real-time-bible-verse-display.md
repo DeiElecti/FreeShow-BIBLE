@@ -20,6 +20,36 @@ Cloud APIs (Google, Microsoft, Amazon, etc.) offer excellent accuracy and langua
 
 For maximum reliability and offline capability, an on-premise ASR engine is ideal. Vosk is a strong candidate thanks to its streaming API, low latency, and multi-language support. It also has bindings for Python, Java, C#, and JavaScript, so it fits many tech stacks and runs on modest hardware (even on a Raspberry Pi in lightweight scenarios). If higher accuracy is needed and sufficient compute is available, a hybrid approach can combine Vosk for immediate results with Whisper as a background verifier that refines longer quotations.
 
+### Remote recognition services
+
+In addition to in-browser microphones, FreeShow’s AutoScripture panel can now connect to an external recogniser over WebSocket. When “Remote recogniser” is selected the app maintains a persistent socket (with automatic reconnection and status feedback) and expects newline-delimited JSON messages such as:
+
+```json
+{ "type": "transcript", "text": "John chapter three verse sixteen", "isFinal": true, "confidence": 0.82 }
+```
+
+You can optionally include `source`, `bibleId`, or send a `"type": "configure"` response to acknowledge the currently active translation. This makes it straightforward to wrap Vosk, Whisper, or a cloud streaming API in a thin Node/Python gateway that emits `{text, confidence}` payloads. The UI exposes the connection state, allows manual reconnects, and stores the remote URL alongside the existing microphone preferences so operators can swap between local/offline engines and cloud recognisers without touching the detection queue or parser logic.
+
+When the remote recogniser resolves passages itself, it can emit structured detections with `"type": "suggestion"` (or an array via `"type": "suggestions"`). Each entry may specify `bibleId`, `bookNumber`, `chapter`, verse bounds, `reference`, `translation`, `text`, and `confidence`. FreeShow verifies the verses against the local Bible cache, deduplicates them, and pushes them into the queue just like locally parsed suggestions.
+
+```json
+{
+  "type": "suggestion",
+  "bibleId": "kjv",
+  "bookNumber": 43,
+  "chapter": 3,
+  "verseStart": 16,
+  "verseEnd": 17,
+  "reference": "John 3:16-17",
+  "text": "For God so loved the world...",
+  "translation": "King James Version",
+  "confidence": 0.9,
+  "source": "remote"
+}
+```
+
+Suggestions can also provide an `osis` key (for example, `"John.3.16-John.3.17"`) or a `verses` array when working with multi-lingual book names. Any missing fields fall back to the currently active translation, so even a minimal payload like `{ "type": "suggestion", "osis": "John.3.16", "bibleId": "kjv" }` is enough to queue a verse instantly.
+
 ### Streaming & Latency
 
 The ASR engine should process audio in streaming mode, outputting partial transcriptions as audio arrives. Vosk's streaming mode and voice-activity detection minimize delay. Batch-oriented models (such as Whisper without streaming support) process audio in chunks, which introduces additional latency. The system should wait until it hears the complete reference (book name, chapter, and verse numbers) before triggering the display to avoid false matches. Detecting patterns like `<Book> <Chapter> verse <Verse>` or `<Book> <Chapter>:<Verse>` in partial transcripts is effective.

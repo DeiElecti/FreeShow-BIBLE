@@ -66,6 +66,11 @@
         }
     ]
 
+    const recognizerModes = [
+        { value: "browser", label: "Browser microphone" },
+        { value: "remote", label: "Remote recognizer" }
+    ] as const
+
     let activeNav = navItems[0].id
     let manualInput = ""
     let language = "en-US"
@@ -90,6 +95,12 @@
     let supported = true
     let previewThemeId = previewThemes[0].id
     let previewTheme = previewThemes[0]
+    let recognizerMode: "browser" | "remote" = "browser"
+    let remoteUrlInput = ""
+    let remoteStatusMessage = ""
+    let remoteConnected = false
+    let startButtonLabel = "Start listening"
+    let isRemoteMode = false
     let dashboardSection: HTMLElement
     let queueSection: HTMLElement
     let historySection: HTMLElement
@@ -114,6 +125,27 @@
     $: partialTranscript = $scriptureAutoState.partialTranscript || ""
     $: listening = $scriptureAutoState.listening
     $: supported = $scriptureAutoState.supported
+    $: recognizerMode = ($scriptureAutoSettings.recognizerMode as "browser" | "remote") || "browser"
+    $: remoteUrlInput = $scriptureAutoSettings.remoteServiceUrl || ""
+    $: remoteConnected = Boolean($scriptureAutoState.remoteConnected)
+    $: remoteStatusMessage = $scriptureAutoState.remoteStatus || ""
+    $: isRemoteMode = recognizerMode === "remote"
+    $: {
+        const statusLower = remoteStatusMessage.toLowerCase()
+        const remoteBusy = statusLower.startsWith("connecting") || statusLower.startsWith("reconnecting")
+        const remoteErrored = statusLower.startsWith("error")
+        startButtonLabel = isRemoteMode
+            ? remoteConnected
+                ? "Disconnect"
+                : remoteBusy
+                    ? "Cancel"
+                    : remoteErrored
+                        ? "Retry"
+                        : "Connect"
+            : listening
+                ? "Stop listening"
+                : "Start listening"
+    }
 
     $: {
         const storeSeconds = Math.round(($scriptureAutoSettings.dedupeWindowMs ?? 15000) / 1000)
@@ -279,7 +311,18 @@
         if (!source) return ""
         if (source === "speech") return "Speech"
         if (source === "manual") return "Manual"
+        if (source === "remote") return "Remote"
         return source.charAt(0).toUpperCase() + source.slice(1)
+    }
+
+    function handleRecognizerModeChange(event: Event) {
+        const value = (event.target as HTMLSelectElement).value as "browser" | "remote"
+        scriptureAutoSettings.update((settings) => ({ ...settings, recognizerMode: value }))
+    }
+
+    function handleRemoteUrlInput(event: Event) {
+        remoteUrlInput = (event.target as HTMLInputElement).value
+        scriptureAutoSettings.update((settings) => ({ ...settings, remoteServiceUrl: remoteUrlInput }))
     }
 
     function scrollToSection(id: string) {
@@ -393,9 +436,20 @@
 
                 <div class="card control-card" bind:this={settingsSection}>
                     <div class="controls-grid">
-                        {#if supported}
-                            <button class:listening={listening} on:click={handleToggleClick}>
-                                {listening ? "Stop listening" : "Start listening"}
+                        {#if supported || isRemoteMode}
+                            <label class="select">
+                                <span>Recognizer</span>
+                                <select value={recognizerMode} on:change={handleRecognizerModeChange} aria-label="Recognizer mode">
+                                    {#each recognizerModes as option}
+                                        <option value={option.value}>{option.label}</option>
+                                    {/each}
+                                </select>
+                            </label>
+                            <button
+                                class:listening={listening || (isRemoteMode && remoteConnected)}
+                                on:click={handleToggleClick}
+                            >
+                                {startButtonLabel}
                             </button>
                             <label class="select">
                                 <span>Language</span>
@@ -421,6 +475,23 @@
                                         <button class="text" on:click={rememberLanguageForBible}>
                                             Remember {currentLanguageLabel || language} for this translation
                                         </button>
+                                    {/if}
+                                </div>
+                            {/if}
+
+                            {#if isRemoteMode}
+                                <div class="remote-config">
+                                    <label>
+                                        <span>Remote service URL</span>
+                                        <input
+                                            type="text"
+                                            value={remoteUrlInput}
+                                            on:input={handleRemoteUrlInput}
+                                            placeholder="ws://localhost:8765"
+                                        />
+                                    </label>
+                                    {#if remoteStatusMessage}
+                                        <p class="status remote-status">{remoteStatusMessage}</p>
                                     {/if}
                                 </div>
                             {/if}
@@ -495,7 +566,7 @@
                     {#if partialTranscript}
                         <p class="partial">…{partialTranscript}</p>
                     {/if}
-                    {#if statusMessage && supported}
+                    {#if statusMessage && (supported || isRemoteMode)}
                         <p class="status">{statusMessage}</p>
                     {/if}
                     {#if $scriptureAutoState.lastReference}
@@ -702,7 +773,7 @@
                             {#each transcriptView as item (item.id)}
                                 <li>
                                     <div class="transcript-meta">
-                                        <span class="tag">{item.source === "speech" ? "Speech" : "Manual"}</span>
+                                        <span class="tag">{formatSourceLabel(item.source)}</span>
                                         <span>{formatTimestamp(item.timestamp)}</span>
                                     </div>
                                     <p>{item.text}</p>
@@ -868,6 +939,38 @@
         background: rgba(255, 255, 255, 0.1);
         color: inherit;
         cursor: pointer;
+    }
+
+    .remote-config {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .remote-config label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 0.8rem;
+    }
+
+    .remote-config input {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        padding: 8px 12px;
+        background: rgba(255, 255, 255, 0.08);
+        color: inherit;
+    }
+
+    .remote-config input:focus {
+        outline: none;
+        border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    .remote-status {
+        font-size: 0.8rem;
+        opacity: 0.75;
     }
 
     .preview-surface {

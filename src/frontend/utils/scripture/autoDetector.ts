@@ -18,6 +18,27 @@ interface DetectionOptions {
     source?: string
 }
 
+interface ExternalScriptureSuggestion {
+    bibleId?: string
+    osis?: string | string[]
+    reference?: string
+    book?: string | number
+    bookNumber?: string | number
+    chapter?: string | number
+    verseStart?: string | number
+    verseEnd?: string | number
+    verses?: Array<string | number>
+    text?: string
+    translation?: string
+    raw?: string
+    confidence?: number
+    source?: string
+}
+
+interface ExternalSuggestionOptions extends DetectionOptions {
+    bibleId?: string
+}
+
 type ParserConstructor = new () => any
 
 interface ParserTranslationInfo {
@@ -46,6 +67,75 @@ const LANGUAGE_TO_PARSER_KEY: Record<string, string> = {
     fr: "fr",
     "fr-fr": "fr",
     "fr-ca": "fr"
+}
+
+const OSIS_BOOK_NUMBERS: Record<string, number> = {
+    GEN: 1,
+    EXOD: 2,
+    LEV: 3,
+    NUM: 4,
+    DEUT: 5,
+    JOSH: 6,
+    JUDG: 7,
+    RUTH: 8,
+    "1SAM": 9,
+    "2SAM": 10,
+    "1KGS": 11,
+    "2KGS": 12,
+    "1CHR": 13,
+    "2CHR": 14,
+    EZRA: 15,
+    NEH: 16,
+    ESTH: 17,
+    JOB: 18,
+    PS: 19,
+    PROV: 20,
+    ECCL: 21,
+    SONG: 22,
+    ISA: 23,
+    JER: 24,
+    LAM: 25,
+    EZEK: 26,
+    DAN: 27,
+    HOS: 28,
+    JOEL: 29,
+    AMOS: 30,
+    OBAD: 31,
+    JONAH: 32,
+    MIC: 33,
+    NAH: 34,
+    HAB: 35,
+    ZEPH: 36,
+    HAG: 37,
+    ZECH: 38,
+    MAL: 39,
+    MATT: 40,
+    MARK: 41,
+    LUKE: 42,
+    JOHN: 43,
+    ACTS: 44,
+    ROM: 45,
+    "1COR": 46,
+    "2COR": 47,
+    GAL: 48,
+    EPH: 49,
+    PHIL: 50,
+    COL: 51,
+    "1THESS": 52,
+    "2THESS": 53,
+    "1TIM": 54,
+    "2TIM": 55,
+    TITUS: 56,
+    PHLM: 57,
+    HEB: 58,
+    JAS: 59,
+    "1PET": 60,
+    "2PET": 61,
+    "1JOHN": 62,
+    "2JOHN": 63,
+    "3JOHN": 64,
+    JUDE: 65,
+    REV: 66
 }
 
 function createParserBundle(key: string, Parser: ParserConstructor): ParserBundle {
@@ -101,6 +191,190 @@ function sanitizeText(text: string): string {
         .replace(/\s+/g, " ")
         .replace(/\s([,.;:!?])/g, "$1")
         .trim()
+}
+
+function normalizeBookKey(value: string): string {
+    let base = value.trim()
+    try {
+        base = base.normalize("NFD")
+    } catch (error) {
+        // Ignore normalization errors in environments that do not support it
+    }
+
+    return base
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^0-9A-Za-z]/g, "")
+        .toLowerCase()
+}
+
+function buildBookLookupMap(bible: Bible): Map<string, number> {
+    const map = new Map<string, number>()
+
+    const books = bible.books || []
+    books.forEach((book) => {
+        const bookNumber = Math.floor(book.number)
+        if (!bookNumber) return
+
+        const candidates = [book.customName, book.name, book.abbreviation]
+        candidates.forEach((candidate) => {
+            if (!candidate) return
+            const key = normalizeBookKey(candidate)
+            if (key) map.set(key, bookNumber)
+        })
+    })
+
+    return map
+}
+
+function toNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value)
+    if (typeof value === "string") {
+        const trimmed = value.trim()
+        if (!trimmed) return null
+        const parsed = Number.parseInt(trimmed, 10)
+        if (Number.isFinite(parsed)) return Math.floor(parsed)
+    }
+    return null
+}
+
+function resolveBookNumber(
+    value: unknown,
+    bible: Bible,
+    lookup: Map<string, number>
+): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value)
+    if (typeof value === "string") {
+        const numeric = toNumber(value)
+        if (numeric) return numeric
+
+        const key = normalizeBookKey(value)
+        if (key && lookup.has(key)) return lookup.get(key) ?? null
+
+        const osisKey = value.replace(/[^0-9A-Za-z]/g, "").toUpperCase()
+        if (osisKey && OSIS_BOOK_NUMBERS[osisKey]) return OSIS_BOOK_NUMBERS[osisKey]
+    }
+
+    return null
+}
+
+function normalizeVerseRangeFromList(values: Array<string | number> | undefined): { start: number; end: number } | null {
+    if (!Array.isArray(values) || !values.length) return null
+    const normalized = values
+        .map((value) => toNumber(value))
+        .filter((value): value is number => typeof value === "number" && value > 0)
+
+    if (!normalized.length) return null
+
+    normalized.sort((a, b) => a - b)
+    return { start: normalized[0], end: normalized[normalized.length - 1] }
+}
+
+function normalizeVerseList(values: Array<string | number> | undefined): string[] {
+    if (!Array.isArray(values)) return []
+    const normalized = values
+        .map((value) => toNumber(value))
+        .filter((value): value is number => typeof value === "number" && value > 0)
+
+    const unique = Array.from(new Set(normalized))
+    unique.sort((a, b) => a - b)
+    return unique.map((value) => value.toString())
+}
+
+function parseOsisRange(
+    value: string | string[] | undefined,
+    bible: Bible,
+    lookup: Map<string, number>
+): { bookNumber: number; chapter: number; startVerse: number; endVerse: number } | null {
+    const osisValue = Array.isArray(value) ? value[0] : value
+    if (typeof osisValue !== "string" || !osisValue.trim()) return null
+
+    const trimmed = osisValue.trim()
+    const [startRaw, endRaw] = trimmed.split("-", 2)
+    const startParts = startRaw.split(".")
+    if (startParts.length < 2) return null
+
+    const bookNumber = resolveBookNumber(startParts[0], bible, lookup)
+    if (!bookNumber) return null
+
+    const chapter = toNumber(startParts[1])
+    if (!chapter || chapter <= 0) return null
+
+    let startVerse = startParts.length > 2 ? toNumber(startParts[2]) ?? 1 : 1
+    if (!startVerse || startVerse <= 0) startVerse = 1
+
+    let endVerse = startVerse
+    let endChapter = chapter
+
+    if (endRaw) {
+        const endParts = endRaw.split(".")
+        if (endParts.length === 1) {
+            const candidate = toNumber(endParts[0])
+            if (candidate) {
+                if (startParts.length > 2) {
+                    endVerse = candidate
+                } else {
+                    endChapter = candidate
+                }
+            }
+        } else if (endParts.length === 2) {
+            const chapterCandidate = toNumber(endParts[0])
+            const verseCandidate = toNumber(endParts[1])
+            if (chapterCandidate) endChapter = chapterCandidate
+            if (verseCandidate) endVerse = verseCandidate
+        } else if (endParts.length >= 3) {
+            const bookCandidate = resolveBookNumber(endParts[0], bible, lookup)
+            if (bookCandidate && bookCandidate !== bookNumber) {
+                return null
+            }
+            const chapterCandidate = toNumber(endParts[endParts.length - 2])
+            const verseCandidate = toNumber(endParts[endParts.length - 1])
+            if (chapterCandidate) endChapter = chapterCandidate
+            if (verseCandidate) endVerse = verseCandidate
+        }
+    }
+
+    if (endChapter !== chapter) return null
+    if (!endVerse || endVerse < startVerse) endVerse = startVerse
+
+    return { bookNumber, chapter, startVerse, endVerse }
+}
+
+function parseReferenceString(
+    reference: string | undefined,
+    bible: Bible,
+    lookup: Map<string, number>
+): { bookNumber: number; chapter: number; startVerse: number; endVerse: number } | null {
+    if (!reference) return null
+    const trimmed = reference.trim()
+    if (!trimmed) return null
+
+    const match = trimmed.match(/^([\dI]{0,3}\s*[A-Za-z\u00C0-\u024F'`.\- ]+)\s+(\d+)(?::(\d+)(?:\s*[-–—]\s*(\d+))?)?/i)
+    if (!match) return null
+
+    const bookKey = normalizeBookKey(match[1])
+    let bookNumber = lookup.get(bookKey) ?? null
+
+    if (!bookNumber) {
+        const romanNormalized = match[1]
+            .replace(/\bIII\b/gi, "3")
+            .replace(/\bII\b/gi, "2")
+            .replace(/\bI\b/gi, "1")
+        const romanKey = normalizeBookKey(romanNormalized)
+        bookNumber = lookup.get(romanKey) ?? null
+    }
+
+    if (!bookNumber) return null
+
+    const chapter = Number.parseInt(match[2], 10)
+    if (!Number.isFinite(chapter) || chapter <= 0) return null
+
+    let startVerse = match[3] ? Number.parseInt(match[3], 10) : 1
+    if (!Number.isFinite(startVerse) || startVerse <= 0) startVerse = 1
+
+    let endVerse = match[4] ? Number.parseInt(match[4], 10) : startVerse
+    if (!Number.isFinite(endVerse) || endVerse < startVerse) endVerse = startVerse
+
+    return { bookNumber, chapter, startVerse, endVerse }
 }
 
 function buildQueueKey(bibleId: string, bookNumber: number, chapter: number, startVerse: number, endVerse: number): string {
@@ -307,15 +581,51 @@ function updateDetectionStats(entries: AutoDetectedScripture[], source: string) 
             }
         })
 
+        const isSpeechSource = source === "speech" || source === "remote"
+
         return {
             ...stats,
             detected: stats.detected + entries.length,
-            speechDetections: stats.speechDetections + (source === "speech" ? entries.length : 0),
+            speechDetections: stats.speechDetections + (isSpeechSource ? entries.length : 0),
             manualDetections: stats.manualDetections + (source === "manual" ? entries.length : 0),
             confidenceSamples: samples,
             averageConfidence: samples ? average : 0,
             lastUpdated: Date.now()
         }
+    })
+}
+
+function commitSuggestions(suggestions: AutoDetectedScripture[], fallbackSource: string) {
+    if (!suggestions.length) return
+
+    recordHistoryEntries(suggestions)
+
+    const grouped = new Map<string, AutoDetectedScripture[]>()
+    suggestions.forEach((item) => {
+        const source = item.source || fallbackSource
+        const existing = grouped.get(source)
+        if (existing) {
+            existing.push(item)
+        } else {
+            grouped.set(source, [item])
+        }
+    })
+
+    grouped.forEach((entries, source) => updateDetectionStats(entries, source))
+
+    scriptureAutoQueue.update((queue) => {
+        const combined = [...suggestions, ...queue]
+        const seen = new Set<string>()
+        const unique: AutoDetectedScripture[] = []
+
+        combined.forEach((item) => {
+            const key = buildQueueKey(item.bibleId, item.bookNumber, item.chapter, item.verseStart, item.verseEnd)
+            if (seen.has(key)) return
+            seen.add(key)
+            unique.push(item)
+        })
+
+        return unique.slice(0, MAX_QUEUE_ITEMS)
     })
 }
 
@@ -550,23 +860,147 @@ export function ingestTranscript(rawText: string, bibleId: string, options: Dete
 
     if (!suggestions.length) return []
 
-    recordHistoryEntries(suggestions)
-    updateDetectionStats(suggestions, source)
+    commitSuggestions(suggestions, source)
 
-    scriptureAutoQueue.update((queue) => {
-        const combined = [...suggestions, ...queue]
-        const seen = new Set<string>()
-        const unique: AutoDetectedScripture[] = []
+    return suggestions
+}
 
-        combined.forEach((item) => {
-            const key = buildQueueKey(item.bibleId, item.bookNumber, item.chapter, item.verseStart, item.verseEnd)
-            if (seen.has(key)) return
-            seen.add(key)
-            unique.push(item)
-        })
+export function ingestExternalSuggestions(
+    input: ExternalScriptureSuggestion | ExternalScriptureSuggestion[],
+    options: ExternalSuggestionOptions = {}
+): AutoDetectedScripture[] {
+    const entries = Array.isArray(input) ? input : input ? [input] : []
+    if (!entries.length) return []
 
-        return unique.slice(0, MAX_QUEUE_ITEMS)
+    const fallbackBibleId = typeof options.bibleId === "string" && options.bibleId.trim() ? options.bibleId.trim() : undefined
+    const fallbackSource = options.source || "remote"
+
+    const cache = get(scripturesCache)
+    const translationMeta = get(scriptures)
+    const settings = get(scriptureAutoSettings)
+    const dedupeWindow = settings?.dedupeWindowMs ?? 15000
+
+    const now = Date.now()
+    pruneProcessedReferences(now, dedupeWindow)
+
+    const existingQueue = get(scriptureAutoQueue)
+    const existingKeys = new Set(
+        existingQueue.map((item) => buildQueueKey(item.bibleId, item.bookNumber, item.chapter, item.verseStart, item.verseEnd))
+    )
+
+    const minimumConfidence = Math.min(Math.max(settings?.minimumConfidence ?? 0.55, 0), 0.99)
+    const parserBundle = resolveParserBundle(settings?.language)
+
+    const runtime: RegisterRuntime = {
+        dedupeWindow,
+        existingKeys,
+        minConfidence: minimumConfidence,
+        translationInfo: parserBundle.translationInfo
+    }
+
+    const suggestions: AutoDetectedScripture[] = []
+
+    entries.forEach((entry) => {
+        if (!entry || typeof entry !== "object") return
+
+        const explicitBibleId = typeof entry.bibleId === "string" && entry.bibleId.trim() ? entry.bibleId.trim() : undefined
+        const bibleId = explicitBibleId || fallbackBibleId
+        if (!bibleId) return
+
+        const bible = cache[bibleId]
+        if (!bible?.books?.length) return
+
+        const bookLookup = buildBookLookupMap(bible)
+
+        let bookNumber = resolveBookNumber(entry.bookNumber ?? entry.book, bible, bookLookup)
+        let chapterNumber = toNumber(entry.chapter)
+
+        const verseRange = normalizeVerseRangeFromList(entry.verses)
+        let startVerse = verseRange?.start ?? toNumber(entry.verseStart)
+        let endVerse = verseRange?.end ?? toNumber(entry.verseEnd)
+
+        const osisRange = parseOsisRange(entry.osis, bible, bookLookup)
+        if (osisRange) {
+            if (!bookNumber) bookNumber = osisRange.bookNumber
+            if (!chapterNumber) chapterNumber = osisRange.chapter
+            if (startVerse == null) startVerse = osisRange.startVerse
+            if (endVerse == null) endVerse = osisRange.endVerse
+        }
+
+        if ((!bookNumber || !chapterNumber) && entry.reference) {
+            const referenceRange = parseReferenceString(entry.reference, bible, bookLookup)
+            if (referenceRange) {
+                if (!bookNumber) bookNumber = referenceRange.bookNumber
+                if (!chapterNumber) chapterNumber = referenceRange.chapter
+                if (startVerse == null) startVerse = referenceRange.startVerse
+                if (endVerse == null) endVerse = referenceRange.endVerse
+            }
+        }
+
+        if (!bookNumber || !chapterNumber) return
+
+        const normalizedStart = startVerse && startVerse > 0 ? startVerse : 1
+        const normalizedEnd = endVerse && endVerse >= normalizedStart ? endVerse : normalizedStart
+
+        const osisValues = Array.isArray(entry.osis)
+            ? entry.osis.filter((value): value is string => typeof value === "string" && value.trim())
+            : typeof entry.osis === "string" && entry.osis.trim()
+              ? [entry.osis.trim()]
+              : []
+
+        const osisPayload = osisValues.length > 1 ? osisValues : osisValues.length === 1 ? osisValues[0] : undefined
+
+        const rawCandidate = entry.raw ?? entry.reference ?? (osisValues.length ? osisValues.join(", ") : "")
+        const rawValue = rawCandidate ? String(rawCandidate) : ""
+
+        const detectionSource =
+            typeof entry.source === "string" && entry.source.trim() ? entry.source.trim() : fallbackSource
+
+        const suggestion = registerSuggestion(
+            {
+                bible,
+                translationName:
+                    entry.translation ||
+                    translationMeta[bibleId]?.customName ||
+                    translationMeta[bibleId]?.name ||
+                    bible.name ||
+                    bible.metadata?.name ||
+                    "",
+                bibleId,
+                bookNumber,
+                chapterNumber,
+                startVerse: normalizedStart,
+                endVerse: normalizedEnd,
+                raw: rawValue,
+                source: detectionSource,
+                osis: osisPayload,
+                confidence:
+                    typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
+                        ? Math.max(0.35, Math.min(entry.confidence, 0.99))
+                        : undefined
+            },
+            runtime
+        )
+
+        if (!suggestion) return
+
+        if (entry.text) suggestion.text = sanitizeText(String(entry.text))
+        if (entry.reference) suggestion.reference = String(entry.reference)
+        if (entry.translation) suggestion.translation = String(entry.translation)
+
+        if (Array.isArray(entry.verses)) {
+            const normalizedVerses = normalizeVerseList(entry.verses)
+            if (normalizedVerses.length) suggestion.verses = normalizedVerses
+        }
+
+        if (typeof entry.source === "string" && entry.source.trim()) suggestion.source = entry.source.trim()
+
+        suggestions.push(suggestion)
     })
+
+    if (!suggestions.length) return []
+
+    commitSuggestions(suggestions, fallbackSource)
 
     return suggestions
 }
