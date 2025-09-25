@@ -1,6 +1,7 @@
 import { get } from "svelte/store"
 import type {
     AutoDetectedScripture,
+    AutoTranscriptEntry,
     ScriptureAutoState,
     ScriptureAutoSettings,
     ScriptureAutoStats
@@ -56,8 +57,11 @@ let lastLanguage: string | null = null
 let remoteConnected = false
 let remoteStatusText: string | null = null
 let currentGrammarSignature: string | null = null
+let isRestoringSession = false
 
 const MAX_TRANSCRIPT_ITEMS = 200
+const MAX_IMPORTED_QUEUE_ITEMS = 12
+const MAX_IMPORTED_HISTORY_ITEMS = 40
 const MAX_VOCABULARY_ITEMS = 256
 
 const ORDINAL_WORDS: Record<string, string> = { 1: "First", 2: "Second", 3: "Third" }
@@ -395,6 +399,7 @@ scriptureAutoState.subscribe((state) => {
 })
 
 scriptureAutoSettings.subscribe((settings) => {
+    if (isRestoringSession) return
     const minConfidence = Math.min(Math.max(settings.minimumConfidence ?? 0.55, 0), 0.99)
     applyConfidenceThreshold(minConfidence)
 
@@ -409,6 +414,10 @@ scriptureAutoSettings.subscribe((settings) => {
 })
 
 scriptureAutoQueue.subscribe((queue) => {
+    if (isRestoringSession) {
+        clearAutoApplyTimer()
+        return
+    }
     const settings = get(scriptureAutoSettings)
     if (!queue.length) {
         lastAutoAppliedId = null
@@ -434,6 +443,7 @@ function clearAutoApplyTimer() {
 }
 
 function applyConfidenceThreshold(minConfidence: number) {
+    if (isRestoringSession) return
     scriptureAutoQueue.update((queue) => {
         if (!queue.length) return queue
 
@@ -1274,6 +1284,332 @@ export function resetAutoScriptureSession() {
 export function getAutoScriptureSessionSnapshot() {
     initializeAutoScriptureService()
     return buildSessionSnapshot()
+}
+
+function sanitizeString(value: unknown): string {
+    if (typeof value === "string") return value.trim()
+    if (value == null) return ""
+    return String(value).trim()
+}
+
+function sanitizeOptionalString(value: unknown): string | null {
+    const text = sanitizeString(value)
+    return text ? text : null
+}
+
+function clampNumber(value: number, min?: number, max?: number): number {
+    let result = value
+    if (typeof min === "number") result = Math.max(min, result)
+    if (typeof max === "number") result = Math.min(max, result)
+    return result
+}
+
+function toNumber(value: unknown, fallback: number, min?: number, max?: number): number {
+    const numeric = typeof value === "number" ? value : Number(value)
+    if (!Number.isFinite(numeric)) return fallback
+    return clampNumber(numeric, min, max)
+}
+
+function toNullableNumber(value: unknown, min?: number, max?: number): number | null {
+    const numeric = typeof value === "number" ? value : Number(value)
+    if (!Number.isFinite(numeric)) return null
+    return clampNumber(numeric, min, max)
+}
+
+function toNullableConfidence(value: unknown): number | null {
+    const numeric = toNullableNumber(value, 0, 1)
+    if (numeric == null) return null
+    return Math.max(0, Math.min(1, numeric))
+}
+
+function hasOwn(object: any, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(object, key)
+}
+
+function buildVerseRange(start: number, end: number): string[] {
+    const verses: string[] = []
+    for (let verse = start; verse <= end; verse += 1) verses.push(String(verse))
+    return verses
+}
+
+function sanitizeVerses(value: unknown, start: number, end: number): string[] {
+    if (Array.isArray(value)) {
+        const verses = value
+            .map((entry) => sanitizeString(entry))
+            .filter((entry) => entry)
+        if (verses.length) return verses
+    }
+    return buildVerseRange(start, end)
+}
+
+function sanitizeSuggestionEntry(entry: any): AutoDetectedScripture | null {
+    if (!entry || typeof entry !== "object") return null
+
+    const id = sanitizeString(entry.id)
+    const bibleId = sanitizeString(entry.bibleId)
+    const bookNumber = Math.floor(toNumber(entry.bookNumber, 0))
+    const chapter = Math.floor(toNumber(entry.chapter, 0))
+    if (!id || !bibleId || bookNumber <= 0 || chapter <= 0) return null
+
+    const verseStart = Math.max(1, Math.floor(toNumber(entry.verseStart, 1, 1)))
+    const verseEnd = Math.max(verseStart, Math.floor(toNumber(entry.verseEnd, verseStart, verseStart)))
+    const verses = sanitizeVerses(entry.verses, verseStart, verseEnd)
+    const reference = sanitizeString(entry.reference) || `${chapter}:${verseStart}${
+        verseEnd > verseStart ? `-${verseEnd}` : ""
+    }`
+    const text = sanitizeString(entry.text)
+    const translation = sanitizeString(entry.translation)
+    const source = sanitizeString(entry.source) || "import"
+    const raw = sanitizeString(entry.raw)
+    const createdAt = Math.max(0, Math.floor(toNumber(entry.createdAt, Date.now())))
+    const osis = sanitizeString(entry.osis)
+    const confidence = toNullableConfidence(entry.confidence)
+
+    const suggestion: AutoDetectedScripture = {
+        id,
+        osis,
+        bibleId,
+        bookNumber,
+        chapter,
+        verseStart,
+        verseEnd,
+        verses,
+        reference,
+        text,
+        translation,
+        source,
+        createdAt,
+        raw
+    }
+
+    if (confidence != null) suggestion.confidence = confidence
+
+    return suggestion
+}
+
+function sanitizeSuggestionList(value: unknown, limit: number): AutoDetectedScripture[] {
+    if (!Array.isArray(value) || limit <= 0) return []
+    const result: AutoDetectedScripture[] = []
+    const seen = new Set<string>()
+
+    for (const entry of value) {
+        const suggestion = sanitizeSuggestionEntry(entry)
+        if (!suggestion) continue
+        if (seen.has(suggestion.id)) continue
+        seen.add(suggestion.id)
+        result.push(suggestion)
+        if (result.length >= limit) break
+    }
+
+    return result
+}
+
+function sanitizeTranscriptList(value: unknown): AutoTranscriptEntry[] {
+    if (!Array.isArray(value)) return []
+    const entries: AutoTranscriptEntry[] = []
+
+    value.forEach((entry) => {
+        if (!entry || typeof entry !== "object") return
+        const id = sanitizeString((entry as any).id)
+        const text = sanitizeString((entry as any).text)
+        if (!id || !text) return
+        const timestamp = Math.max(0, Math.floor(toNumber((entry as any).timestamp, Date.now())))
+        const source = sanitizeString((entry as any).source) || "import"
+        entries.push({ id, text, timestamp, source })
+    })
+
+    entries.sort((a, b) => a.timestamp - b.timestamp)
+    return entries.slice(-MAX_TRANSCRIPT_ITEMS)
+}
+
+function toCount(value: unknown): number {
+    return Math.max(0, Math.floor(toNumber(value, 0, 0)))
+}
+
+function sanitizeStats(value: any): ScriptureAutoStats {
+    const defaults = createDefaultStats()
+    const startedAt = Math.max(0, Math.floor(toNumber(value?.startedAt, defaults.startedAt)))
+    const lastUpdatedCandidate = toNullableNumber(value?.lastUpdated)
+    const lastUpdated =
+        lastUpdatedCandidate != null && lastUpdatedCandidate < startedAt ? startedAt : lastUpdatedCandidate
+
+    return {
+        startedAt,
+        lastUpdated,
+        detected: toCount(value?.detected),
+        speechDetections: toCount(value?.speechDetections),
+        manualDetections: toCount(value?.manualDetections),
+        displayed: toCount(value?.displayed),
+        autoDisplayed: toCount(value?.autoDisplayed),
+        manualSubmissions: toCount(value?.manualSubmissions),
+        dismissed: toCount(value?.dismissed),
+        confidenceSamples: toCount(value?.confidenceSamples),
+        averageConfidence: toNumber(value?.averageConfidence, 0, 0, 1)
+    }
+}
+
+function sanitizeLanguageOverrides(value: unknown): Record<string, string> {
+    if (!value || typeof value !== "object") return {}
+    const overrides: Record<string, string> = {}
+    Object.entries(value as Record<string, unknown>).forEach(([key, raw]) => {
+        const normalizedKey = sanitizeString(key)
+        const normalizedValue = sanitizeString(raw)
+        if (!normalizedKey || !normalizedValue) return
+        overrides[normalizedKey] = normalizedValue
+    })
+    return overrides
+}
+
+function sanitizeSessionState(value: any): Partial<ScriptureAutoState> {
+    if (!value || typeof value !== "object") return {}
+    const partial: Partial<ScriptureAutoState> = {}
+
+    if (hasOwn(value, "lastHeardAt")) partial.lastHeardAt = toNullableNumber(value.lastHeardAt)
+    if (hasOwn(value, "lastReference")) partial.lastReference = sanitizeOptionalString(value.lastReference)
+    if (hasOwn(value, "lastSource")) partial.lastSource = sanitizeOptionalString(value.lastSource)
+    if (hasOwn(value, "lastText")) partial.lastText = sanitizeOptionalString(value.lastText)
+    if (hasOwn(value, "lastConfidence")) partial.lastConfidence = toNullableConfidence(value.lastConfidence)
+    if (hasOwn(value, "activeBibleId")) partial.activeBibleId = sanitizeOptionalString(value.activeBibleId)
+    if (hasOwn(value, "activeBibleName")) partial.activeBibleName = sanitizeOptionalString(value.activeBibleName)
+    if (hasOwn(value, "activeScriptureId")) partial.activeScriptureId = sanitizeOptionalString(value.activeScriptureId)
+    if (hasOwn(value, "currentReference")) partial.currentReference = sanitizeOptionalString(value.currentReference)
+    if (hasOwn(value, "currentText")) partial.currentText = sanitizeOptionalString(value.currentText)
+    if (hasOwn(value, "currentTranslation")) partial.currentTranslation = sanitizeOptionalString(value.currentTranslation)
+    if (hasOwn(value, "currentAppliedAt")) partial.currentAppliedAt = toNullableNumber(value.currentAppliedAt)
+    if (hasOwn(value, "currentSource")) partial.currentSource = sanitizeOptionalString(value.currentSource)
+    if (hasOwn(value, "currentConfidence")) partial.currentConfidence = toNullableConfidence(value.currentConfidence)
+    if (hasOwn(value, "currentAuto")) partial.currentAuto = Boolean(value.currentAuto)
+
+    return partial
+}
+
+function sanitizeSettingsSnapshot(snapshot: any, current: ScriptureAutoSettings): ScriptureAutoSettings {
+    if (!snapshot || typeof snapshot !== "object") return current
+
+    const language = hasOwn(snapshot, "language")
+        ? sanitizeString(snapshot.language) || current.language || "en-US"
+        : current.language || "en-US"
+    const themeId = hasOwn(snapshot, "themeId")
+        ? sanitizeString(snapshot.themeId) || current.themeId || "classic"
+        : current.themeId || "classic"
+    const minimumConfidence = hasOwn(snapshot, "minimumConfidence")
+        ? toNumber(snapshot.minimumConfidence, current.minimumConfidence ?? 0.55, 0, 0.99)
+        : current.minimumConfidence ?? 0.55
+    const autoDisplayDelayMs = hasOwn(snapshot, "autoDisplayDelayMs")
+        ? Math.max(0, Math.floor(toNumber(snapshot.autoDisplayDelayMs, current.autoDisplayDelayMs ?? 0, 0, 15000)))
+        : current.autoDisplayDelayMs ?? 0
+    const dedupeWindowMs = hasOwn(snapshot, "dedupeWindowMs")
+        ? Math.max(3000, Math.floor(toNumber(snapshot.dedupeWindowMs, current.dedupeWindowMs ?? 15000)))
+        : current.dedupeWindowMs ?? 15000
+    const overrides = hasOwn(snapshot, "languageOverrides")
+        ? sanitizeLanguageOverrides(snapshot.languageOverrides)
+        : current.languageOverrides || {}
+    const remoteServiceUrl = hasOwn(snapshot, "remoteServiceUrl")
+        ? sanitizeString(snapshot.remoteServiceUrl)
+        : current.remoteServiceUrl || ""
+
+    return {
+        language,
+        autoDisplay: hasOwn(snapshot, "autoDisplay") ? Boolean(snapshot.autoDisplay) : current.autoDisplay,
+        dedupeWindowMs,
+        autoStartListening: hasOwn(snapshot, "autoStartListening")
+            ? Boolean(snapshot.autoStartListening)
+            : current.autoStartListening,
+        themeId,
+        minimumConfidence,
+        autoDisplayDelayMs,
+        languageOverrides: overrides,
+        recognizerMode: snapshot.recognizerMode === "remote" ? "remote" : current.recognizerMode || "browser",
+        remoteServiceUrl
+    }
+}
+
+function formatSnapshotTimestamp(value: string): string | null {
+    const parsed = Date.parse(value)
+    if (Number.isNaN(parsed)) return null
+    const date = new Date(parsed)
+    try {
+        const formatted = date.toLocaleString()
+        if (formatted && typeof formatted === "string") return formatted
+    } catch (error) {
+        // Ignore formatting errors and fall back to ISO string
+    }
+    return date.toISOString()
+}
+
+export function importAutoScriptureSession(
+    snapshotInput: unknown,
+    options: { applySettings?: boolean } = {}
+): boolean {
+    initializeAutoScriptureService()
+
+    let snapshot: any = snapshotInput
+    if (typeof snapshotInput === "string") {
+        try {
+            snapshot = JSON.parse(snapshotInput)
+        } catch (error) {
+            console.error("Invalid AutoScripture session snapshot", error)
+            setStatus("Session import failed. The file is not valid JSON.")
+            return false
+        }
+    }
+
+    if (!snapshot || typeof snapshot !== "object") {
+        setStatus("Session import failed. Unsupported snapshot format.")
+        return false
+    }
+
+    if (snapshot.version !== SESSION_EXPORT_VERSION) {
+        setStatus("Session import failed. Unsupported snapshot version.")
+        return false
+    }
+
+    const queue = sanitizeSuggestionList(snapshot.queue, MAX_IMPORTED_QUEUE_ITEMS)
+    const history = sanitizeSuggestionList(snapshot.history, MAX_IMPORTED_HISTORY_ITEMS)
+    const transcript = sanitizeTranscriptList(snapshot.transcript)
+    const stats = sanitizeStats(snapshot.stats)
+    const statePartial = sanitizeSessionState(snapshot.state)
+    const exportedAt = typeof snapshot.exportedAt === "string" ? snapshot.exportedAt : null
+    const applySettings = Boolean(options.applySettings)
+    const currentSettings = get(scriptureAutoSettings)
+    const normalizedSettings = applySettings ? sanitizeSettingsSnapshot(snapshot.settings, currentSettings) : null
+
+    isRestoringSession = true
+    try {
+        clearAutoApplyTimer()
+        lastAutoAppliedId = null
+        pendingAutoApplyId = null
+        pendingAutoApplyDelay = 0
+
+        if (normalizedSettings) {
+            scriptureAutoSettings.set(normalizedSettings)
+        }
+
+        scriptureAutoQueue.set(queue)
+        scriptureAutoHistory.set(history)
+        scriptureAutoTranscript.set(transcript)
+        scriptureAutoStats.set(stats)
+        clearProcessedReferences()
+
+        if (Object.keys(statePartial).length) {
+            updateState({ ...statePartial, partialTranscript: "" })
+        } else {
+            updateState({ partialTranscript: "" })
+        }
+
+        const formattedTimestamp = exportedAt ? formatSnapshotTimestamp(exportedAt) : null
+        const message = formattedTimestamp
+            ? `Session snapshot imported (exported ${formattedTimestamp}).`
+            : "Session snapshot imported."
+        setStatus(message)
+        return true
+    } catch (error) {
+        console.error("Failed to import AutoScripture session", error)
+        setStatus("Unable to import the session snapshot.")
+        return false
+    } finally {
+        isRestoringSession = false
+    }
 }
 
 export function exportAutoScriptureSession(): boolean {

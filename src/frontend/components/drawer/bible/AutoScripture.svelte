@@ -20,7 +20,8 @@
         processAutoScriptureManualInput,
         toggleAutoScriptureListening,
         exportAutoScriptureSession,
-        resetAutoScriptureSession
+        resetAutoScriptureSession,
+        importAutoScriptureSession
     } from "../../../utils/scripture/autoService"
     import {
         SCRIPTURE_AUTO_LANGUAGE_OPTIONS,
@@ -108,6 +109,8 @@
     let historySection: HTMLElement
     let transcriptSection: HTMLElement
     let settingsSection: HTMLElement
+    let importFileInput: HTMLInputElement | null = null
+    let pendingImportApplySettings = false
 
     $: language = $scriptureAutoSettings.language
     $: languageOverrides = ($scriptureAutoSettings.languageOverrides || {}) as Record<string, string>
@@ -187,6 +190,35 @@
 
     function handleExportSession() {
         exportAutoScriptureSession()
+    }
+
+    function handleImportSessionButton(event: MouseEvent) {
+        pendingImportApplySettings = Boolean(event.shiftKey)
+        importFileInput?.click()
+    }
+
+    async function handleImportSessionChange(event: Event) {
+        const input = event.currentTarget as HTMLInputElement | null
+        if (!input) return
+
+        const file = input.files?.[0] || null
+        input.value = ""
+
+        const applySettings = pendingImportApplySettings
+        pendingImportApplySettings = false
+
+        if (!file) return
+
+        try {
+            const text = await file.text()
+            importAutoScriptureSession(text, { applySettings })
+        } catch (error) {
+            console.error("Failed to read AutoScripture session file", error)
+            scriptureAutoState.update((state) => ({
+                ...state,
+                status: "Unable to read the session log file."
+            }))
+        }
     }
 
     function handleResetSession() {
@@ -646,11 +678,25 @@
                         <span class="hint">Archive or reset this detection run.</span>
                     </div>
                     <div class="session-actions">
+                        <input
+                            type="file"
+                            accept="application/json"
+                            bind:this={importFileInput}
+                            on:change={handleImportSessionChange}
+                            style="display: none;"
+                        />
+                        <button
+                            on:click={handleImportSessionButton}
+                            title="Hold Shift to apply recorded recognition settings"
+                        >
+                            Import session log
+                        </button>
                         <button class="primary" on:click={handleExportSession}>Export session log</button>
                         <button class="danger" on:click={handleResetSession}>Reset session</button>
                     </div>
                     <p class="hint subtle">
-                        Resetting clears the queue, transcript, history, and statistics so you can start fresh.
+                        Resetting clears the queue, transcript, history, and statistics so you can start fresh. Hold Shift while
+                        importing to apply the recorded recognition settings.
                     </p>
                 </div>
 
