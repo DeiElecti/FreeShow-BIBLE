@@ -22,13 +22,15 @@ For maximum reliability and offline capability, an on-premise ASR engine is idea
 
 ### Remote recognition services
 
-In addition to in-browser microphones, FreeShow’s AutoScripture panel can now connect to an external recogniser over WebSocket. When “Remote recogniser” is selected the app maintains a persistent socket (with automatic reconnection and status feedback) and expects newline-delimited JSON messages such as:
+In addition to in-browser microphones, FreeShow’s AutoScripture panel can now connect to an external recogniser over WebSocket. When “Remote recogniser” is selected the app maintains a persistent socket (with automatic reconnection and status feedback). As soon as the connection opens FreeShow sends a `"type": "configure"` payload describing the active microphone language, the focused Bible ID, the friendly translation name, and a `vocabulary` array containing the current book names and aliases. Engines such as Vosk or Whisper can feed that list directly into phrase boosting or custom grammars so they instantly benefit from the operator’s translation choice.
+
+The socket expects newline-delimited JSON messages such as:
 
 ```json
 { "type": "transcript", "text": "John chapter three verse sixteen", "isFinal": true, "confidence": 0.82 }
 ```
 
-You can optionally include `source`, `bibleId`, or send a `"type": "configure"` response to acknowledge the currently active translation. This makes it straightforward to wrap Vosk, Whisper, or a cloud streaming API in a thin Node/Python gateway that emits `{text, confidence}` payloads. The UI exposes the connection state, allows manual reconnects, and stores the remote URL alongside the existing microphone preferences so operators can swap between local/offline engines and cloud recognisers without touching the detection queue or parser logic.
+You can optionally include `source`, `bibleId`, or emit `"type": "ready"` to request the configuration again. Remote services may also send `"type": "ping"` heartbeats; FreeShow replies with `"type": "pong"` automatically. This makes it straightforward to wrap Vosk, Whisper, or a cloud streaming API in a thin Node/Python gateway that emits `{text, confidence}` payloads. The UI exposes the connection state, allows manual reconnects, and stores the remote URL alongside the existing microphone preferences so operators can swap between local/offline engines and cloud recognisers without touching the detection queue or parser logic.
 
 When the remote recogniser resolves passages itself, it can emit structured detections with `"type": "suggestion"` (or an array via `"type": "suggestions"`). Each entry may specify `bibleId`, `bookNumber`, `chapter`, verse bounds, `reference`, `translation`, `text`, and `confidence`. FreeShow verifies the verses against the local Bible cache, deduplicates them, and pushes them into the queue just like locally parsed suggestions.
 
@@ -58,6 +60,8 @@ The ASR engine should process audio in streaming mode, outputting partial transc
 
 Sermons include unique proper names, diverse accents, and occasional background noise. Feeding the system directly from the pastor's microphone improves accuracy by reducing ambient sound. Loading the ASR model with custom vocabulary (all Bible book names plus common phrases such as "chapter" and "verse") further improves detection. Whisper's large training set offers robustness to accent and noise, while Vosk can be tuned with custom language models if necessary.
 
+FreeShow now derives that vocabulary automatically. The AutoScripture service exports the active Bible's book list into a `SpeechGrammarList`, so in-browser microphones receive an explicit grammar covering book names, ordinal variants ("First John", "1 John"), and accent-free fallbacks. The same vocabulary is sent to remote recognisers through the WebSocket handshake, allowing Vosk, Whisper, or any external engine to boost the exact phrases the congregation is likely to speak without manual configuration.
+
 ## Parsing and Identifying Bible References
 
 After transcription, the system must detect Bible references in the text. Instead of implementing a parser from scratch, leverage existing open-source scripture parsing libraries:
@@ -68,7 +72,7 @@ After transcription, the system must detect Bible references in the text. Instea
 
 Integration options include continuously scanning the ASR transcript buffer for valid references or parsing finalized sentences. Continuous scanning allows immediate detection but requires safeguards against false positives (e.g., verifying that chapter and verse numbers exist in the specified book).
 
-In practice, you can load language-specific BCV lexicons to mirror the spoken language. Our implementation dynamically swaps between English, Spanish, Portuguese, and French parser bundles depending on the operator's microphone language, while falling back to English when a manual typed reference needs parsing. Operators can also remember a preferred recognition language per translation (for example, always pairing a Spanish Bible with a Spanish microphone locale). The software applies those saved overrides automatically whenever the matching translation is selected, so volunteers do not need to keep reconfiguring the microphone mid-service.
+In practice, you can load language-specific BCV lexicons to mirror the spoken language. Our implementation dynamically swaps between English, Spanish, Portuguese, French, German, Italian, Dutch, Swedish, Russian, and Polish parser bundles depending on the operator's microphone language, while falling back to English when a manual typed reference needs parsing. Operators can also remember a preferred recognition language per translation (for example, always pairing a Spanish Bible with a Spanish microphone locale). The software applies those saved overrides automatically whenever the matching translation is selected, so volunteers do not need to keep reconfiguring the microphone mid-service.
 
 ## Retrieving Verse Text from the Bible
 

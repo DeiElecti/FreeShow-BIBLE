@@ -10,7 +10,13 @@ export const SCRIPTURE_AUTO_LANGUAGE_OPTIONS: ScriptureAutoLanguageOption[] = [
     { value: "es-MX", label: "Spanish (Mexico)" },
     { value: "pt-BR", label: "Portuguese (Brazil)" },
     { value: "fr-FR", label: "French (France)" },
-    { value: "fr-CA", label: "French (Canada)" }
+    { value: "fr-CA", label: "French (Canada)" },
+    { value: "de-DE", label: "German (Germany)" },
+    { value: "it-IT", label: "Italian" },
+    { value: "nl-NL", label: "Dutch (Netherlands)" },
+    { value: "sv-SE", label: "Swedish" },
+    { value: "ru-RU", label: "Russian" },
+    { value: "pl-PL", label: "Polish" }
 ]
 
 const LANGUAGE_LABEL_MAP = new Map(

@@ -1,7 +1,13 @@
+import { bcv_parser as de_bcv_parser } from "bible-passage-reference-parser/js/de_bcv_parser"
 import { bcv_parser as en_bcv_parser } from "bible-passage-reference-parser/js/en_bcv_parser"
 import { bcv_parser as es_bcv_parser } from "bible-passage-reference-parser/js/es_bcv_parser"
 import { bcv_parser as fr_bcv_parser } from "bible-passage-reference-parser/js/fr_bcv_parser"
+import { bcv_parser as it_bcv_parser } from "bible-passage-reference-parser/js/it_bcv_parser"
+import { bcv_parser as nl_bcv_parser } from "bible-passage-reference-parser/js/nl_bcv_parser"
+import { bcv_parser as pl_bcv_parser } from "bible-passage-reference-parser/js/pl_bcv_parser"
 import { bcv_parser as pt_bcv_parser } from "bible-passage-reference-parser/js/pt_bcv_parser"
+import { bcv_parser as ru_bcv_parser } from "bible-passage-reference-parser/js/ru_bcv_parser"
+import { bcv_parser as sv_bcv_parser } from "bible-passage-reference-parser/js/sv_bcv_parser"
 import { get } from "svelte/store"
 import type { AutoDetectedScripture } from "../../../types/Scripture"
 import type { Bible } from "../../../types/Bible"
@@ -66,7 +72,21 @@ const LANGUAGE_TO_PARSER_KEY: Record<string, string> = {
     "pt-br": "pt",
     fr: "fr",
     "fr-fr": "fr",
-    "fr-ca": "fr"
+    "fr-ca": "fr",
+    de: "de",
+    "de-de": "de",
+    "de-at": "de",
+    it: "it",
+    "it-it": "it",
+    nl: "nl",
+    "nl-nl": "nl",
+    "nl-be": "nl",
+    sv: "sv",
+    "sv-se": "sv",
+    ru: "ru",
+    "ru-ru": "ru",
+    pl: "pl",
+    "pl-pl": "pl"
 }
 
 const OSIS_BOOK_NUMBERS: Record<string, number> = {
@@ -160,10 +180,16 @@ function createParserBundle(key: string, Parser: ParserConstructor): ParserBundl
 }
 
 const PARSER_BUNDLES: Record<string, ParserBundle> = {
+    de: createParserBundle("de", de_bcv_parser),
     en: createParserBundle("en", en_bcv_parser),
     es: createParserBundle("es", es_bcv_parser),
     fr: createParserBundle("fr", fr_bcv_parser),
-    pt: createParserBundle("pt", pt_bcv_parser)
+    it: createParserBundle("it", it_bcv_parser),
+    nl: createParserBundle("nl", nl_bcv_parser),
+    pl: createParserBundle("pl", pl_bcv_parser),
+    pt: createParserBundle("pt", pt_bcv_parser),
+    ru: createParserBundle("ru", ru_bcv_parser),
+    sv: createParserBundle("sv", sv_bcv_parser)
 }
 
 function resolveParserBundle(language?: string): ParserBundle {
@@ -177,6 +203,17 @@ function resolveParserBundle(language?: string): ParserBundle {
     if (base && PARSER_BUNDLES[base]) return PARSER_BUNDLES[base]
 
     return PARSER_BUNDLES[DEFAULT_PARSER_KEY]
+}
+
+export function getParserLanguageBookNames(language?: string): string[] {
+    const bundle = resolveParserBundle(language)
+    const translationInfo = bundle.translationInfo
+    if (!translationInfo?.books?.length) return []
+
+    return translationInfo.books
+        .map((book) => (typeof book === "string" ? book : ""))
+        .filter((name) => typeof name === "string" && name.trim())
+        .map((name) => name.trim())
 }
 
 const processedReferences = new Map<string, number>()

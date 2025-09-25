@@ -8,11 +8,13 @@ import {
     scriptureAutoState,
     scriptureAutoStats,
     scriptureAutoTranscript,
-    scriptures
+    scriptures,
+    scripturesCache
 } from "../../stores"
 import {
     clearProcessedReferences,
     dismissSuggestion,
+    getParserLanguageBookNames,
     ingestExternalSuggestions,
     ingestTranscript
 } from "./autoDetector"
@@ -37,17 +39,233 @@ let remoteSocket: WebSocket | null = null
 let remoteReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let remoteManualDisconnect = false
 let remoteReconnectAttempts = 0
-let lastRemoteConfig: { language: string | null; bibleId: string | null } = {
+let lastRemoteConfig: { language: string | null; bibleId: string | null; vocabularyKey: string | null } = {
     language: null,
-    bibleId: null
+    bibleId: null,
+    vocabularyKey: null
 }
 type RecognizerMode = "browser" | "remote"
 let currentRecognizerMode: RecognizerMode = "browser"
 let lastLanguage: string | null = null
 let remoteConnected = false
 let remoteStatusText: string | null = null
+let currentGrammarSignature: string | null = null
 
 const MAX_TRANSCRIPT_ITEMS = 200
+const MAX_VOCABULARY_ITEMS = 256
+
+const ORDINAL_WORDS: Record<string, string> = { 1: "First", 2: "Second", 3: "Third" }
+const ROMAN_NUMERALS: Record<string, string> = { 1: "I", 2: "II", 3: "III" }
+
+const FALLBACK_BOOK_NAMES = [
+    "Genesis",
+    "Exodus",
+    "Leviticus",
+    "Numbers",
+    "Deuteronomy",
+    "Joshua",
+    "Judges",
+    "Ruth",
+    "1 Samuel",
+    "2 Samuel",
+    "1 Kings",
+    "2 Kings",
+    "1 Chronicles",
+    "2 Chronicles",
+    "Ezra",
+    "Nehemiah",
+    "Esther",
+    "Job",
+    "Psalms",
+    "Psalm",
+    "Proverbs",
+    "Ecclesiastes",
+    "Song of Songs",
+    "Song of Solomon",
+    "Canticles",
+    "Isaiah",
+    "Jeremiah",
+    "Lamentations",
+    "Ezekiel",
+    "Daniel",
+    "Hosea",
+    "Joel",
+    "Amos",
+    "Obadiah",
+    "Jonah",
+    "Micah",
+    "Nahum",
+    "Habakkuk",
+    "Zephaniah",
+    "Haggai",
+    "Zechariah",
+    "Malachi",
+    "Matthew",
+    "Mark",
+    "Luke",
+    "John",
+    "Acts",
+    "Romans",
+    "1 Corinthians",
+    "2 Corinthians",
+    "Galatians",
+    "Ephesians",
+    "Philippians",
+    "Colossians",
+    "1 Thessalonians",
+    "2 Thessalonians",
+    "1 Timothy",
+    "2 Timothy",
+    "Titus",
+    "Philemon",
+    "Hebrews",
+    "James",
+    "1 Peter",
+    "2 Peter",
+    "1 John",
+    "2 John",
+    "3 John",
+    "Jude",
+    "Revelation",
+    "Revelations"
+]
+
+function sanitizeGrammarSource(value: unknown): string | null {
+    if (value == null) return null
+
+    const raw = typeof value === "string" ? value : String(value)
+    const normalized = raw
+        .replace(/[\u00A0\u2007\u202F]/g, " ")
+        .replace(/[\u2013\u2014]/g, "-")
+        .replace(/\s+/g, " ")
+        .trim()
+
+    if (!normalized) return null
+    return normalized
+}
+
+function addVocabularyVariant(target: Map<string, string>, value: unknown) {
+    const normalized = sanitizeGrammarSource(value)
+    if (!normalized) return
+
+    const base = normalized.replace(/\s+/g, " ")
+    const key = base.toLowerCase()
+    if (!target.has(key)) target.set(key, base)
+
+    let ascii = base.normalize("NFD")
+    try {
+        ascii = ascii.replace(/\p{Diacritic}/gu, "")
+    } catch (error) {
+        ascii = ascii.replace(/[\u0300-\u036f]/g, "")
+    }
+    ascii = ascii.replace(/\s+/g, " ").trim()
+    if (ascii && ascii !== base) {
+        const asciiKey = ascii.toLowerCase()
+        if (!target.has(asciiKey)) target.set(asciiKey, ascii)
+    }
+
+    const ordinalMatch = base.match(/^([123])\s+(.+)$/)
+    if (ordinalMatch) {
+        const digit = ordinalMatch[1]
+        const rest = ordinalMatch[2]
+        const ordinalWord = ORDINAL_WORDS[digit]
+        const romanNumeral = ROMAN_NUMERALS[digit]
+        if (ordinalWord) addVocabularyVariant(target, `${ordinalWord} ${rest}`)
+        if (romanNumeral) addVocabularyVariant(target, `${romanNumeral} ${rest}`)
+    }
+
+    const romanMatch = base.match(/^(I{1,3})\s+(.+)$/i)
+    if (romanMatch) {
+        const romanValue = romanMatch[1].toUpperCase()
+        const rest = romanMatch[2]
+        const romanToDigit: Record<string, string> = { I: "1", II: "2", III: "3" }
+        const digit = romanToDigit[romanValue]
+        if (digit) addVocabularyVariant(target, `${digit} ${rest}`)
+    }
+}
+
+function buildVocabularyForBible(
+    bibleId: string | null,
+    language: string
+): { values: string[]; signature: string } {
+    const cache = get(scripturesCache)
+    const bible = bibleId ? cache[bibleId] : null
+    const collected = new Map<string, string>()
+
+    if (bible?.books?.length) {
+        bible.books.forEach((book: any) => {
+            const candidates = [
+                book?.customName,
+                book?.name,
+                book?.nameLong,
+                book?.abbreviation,
+                book?.shortName,
+                book?.title
+            ]
+
+            candidates.forEach((entry) => addVocabularyVariant(collected, entry))
+        })
+    }
+
+    const parserNames = getParserLanguageBookNames(language)
+    parserNames.forEach((name) => addVocabularyVariant(collected, name))
+
+    FALLBACK_BOOK_NAMES.forEach((name) => addVocabularyVariant(collected, name))
+
+    const values = Array.from(collected.values()).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "accent" })
+    )
+    const limited = values.slice(0, MAX_VOCABULARY_ITEMS)
+
+    const signature = JSON.stringify({
+        id: bibleId || "default",
+        lang: (language || "en-US").toLowerCase(),
+        total: values.length,
+        sample: limited.slice(0, 32)
+    })
+
+    return { values: limited, signature }
+}
+
+function encodeGrammarTerm(value: string): string | null {
+    if (!value) return null
+    const sanitized = value.replace(/[=;|]/g, " ").replace(/\s+/g, " ").trim()
+    if (!sanitized) return null
+    const escaped = sanitized.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    return `"${escaped}"`
+}
+
+function updateRecognitionGrammar(force = false) {
+    if (typeof window === "undefined" || currentRecognizerMode !== "browser" || !recognition) return
+
+    const GrammarCtor = (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList
+    if (!GrammarCtor) return
+
+    const settings = get(scriptureAutoSettings)
+    const language = settings.language || "en-US"
+    const vocabulary = buildVocabularyForBible(activeBibleId, language)
+    const signature = `${language.toLowerCase()}:${vocabulary.signature}`
+
+    if (!force && currentGrammarSignature === signature) return
+    currentGrammarSignature = signature
+
+    try {
+        const grammarList = new GrammarCtor()
+        const encoded = vocabulary.values
+            .map((value) => encodeGrammarTerm(value))
+            .filter((value): value is string => Boolean(value))
+
+        if (encoded.length) {
+            const grammar = `#JSGF V1.0; grammar scriptureBooks; public <book> = ${encoded.join(" | ")} ;`
+            grammarList.addFromString(grammar, 1)
+        }
+
+        recognition.grammars = grammarList
+    } catch (error) {
+        console.error("Failed to update speech recognition grammar", error)
+        currentGrammarSignature = null
+    }
+}
 
 function appendTranscriptEntry(text: string, source: string) {
     const trimmed = (text || "").replace(/\s+/g, " ").trim()
@@ -103,6 +321,7 @@ scriptureAutoState.subscribe((state) => {
     }
 
     sendRemoteConfiguration()
+    if (currentRecognizerMode === "browser") updateRecognitionGrammar()
 })
 
 scriptureAutoSettings.subscribe((settings) => {
@@ -171,6 +390,7 @@ function setRecognizerMode(mode: RecognizerMode) {
     if (currentRecognizerMode === mode) return
     currentRecognizerMode = mode
     updateState({ recognizerMode: mode })
+    if (mode !== "browser") currentGrammarSignature = null
 }
 
 function setRemoteConnectedState(value: boolean) {
@@ -231,8 +451,16 @@ function sendRemoteConfiguration(force = false) {
     const settings = get(scriptureAutoSettings)
     const language = (settings.language || "en-US").trim()
     const bibleId = activeBibleId || null
+    const vocabulary = buildVocabularyForBible(bibleId, language)
 
-    if (!force && language === lastRemoteConfig.language && bibleId === lastRemoteConfig.bibleId) return
+    if (
+        !force &&
+        language === lastRemoteConfig.language &&
+        bibleId === lastRemoteConfig.bibleId &&
+        vocabulary.signature === lastRemoteConfig.vocabularyKey
+    ) {
+        return
+    }
 
     const translationMeta = bibleId ? get(scriptures)[bibleId] : null
     const translationName =
@@ -245,9 +473,11 @@ function sendRemoteConfiguration(force = false) {
         translation: translationName
     }
 
+    if (vocabulary.values.length) payload.vocabulary = vocabulary.values
+
     try {
         remoteSocket.send(JSON.stringify(payload))
-        lastRemoteConfig = { language, bibleId }
+        lastRemoteConfig = { language, bibleId, vocabularyKey: vocabulary.signature }
     } catch (error) {
         console.error("Failed to send remote configuration", error)
     }
@@ -269,6 +499,22 @@ function processRemotePayload(raw: unknown) {
     const type = typeof payload.type === "string" ? payload.type.toLowerCase() : "transcript"
     const sourceRaw = typeof payload.source === "string" ? payload.source.trim() : ""
     const source = sourceRaw ? sourceRaw.toLowerCase() : "remote"
+
+    if (type === "ping") {
+        try {
+            remoteSocket?.send(
+                JSON.stringify({ type: "pong", timestamp: Date.now(), received: payload.timestamp || Date.now() })
+            )
+        } catch (error) {
+            console.error("Failed to send remote pong", error)
+        }
+        return
+    }
+
+    if (type === "ready") {
+        sendRemoteConfiguration(true)
+        return
+    }
 
     if (type === "transcript" || type === "partial" || type === "final") {
         const text = String(payload.text ?? payload.transcript ?? "").trim()
@@ -405,7 +651,7 @@ function connectRemoteRecognizer(): boolean {
         setRemoteStatus("Connected")
         setListeningState(true)
         setStatus("Connected to remote recognizer.")
-        lastRemoteConfig = { language: null, bibleId: null }
+        lastRemoteConfig = { language: null, bibleId: null, vocabularyKey: null }
         sendRemoteConfiguration(true)
     }
 
@@ -705,6 +951,7 @@ function ensureRecognition(): boolean {
     }
 
     setSupportedState(true)
+    updateRecognitionGrammar(true)
     return true
 }
 
@@ -769,12 +1016,16 @@ function handleSettingsChange(settings: ScriptureAutoSettings) {
     const language = settings.language || "en-US"
     if (mode === "browser") {
         if (!recognition) ensureRecognition()
-        if (recognition) recognition.lang = language
+        if (recognition) {
+            recognition.lang = language
+            updateRecognitionGrammar(true)
+        }
     }
 
     if (language !== lastLanguage) {
         lastLanguage = language
         if (mode === "remote") sendRemoteConfiguration(true)
+        else updateRecognitionGrammar(true)
     }
 
     const autoStart = settings.autoStartListening ?? false
@@ -828,6 +1079,7 @@ export function startAutoScriptureListening(): boolean {
     }
 
     if (!ensureRecognition()) return false
+    updateRecognitionGrammar(true)
 
     if (isListening) {
         shouldResume = true
