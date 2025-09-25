@@ -23,7 +23,8 @@
         resetAutoScriptureSession,
         importAutoScriptureSession,
         clearAutoScriptureDisplay,
-        toggleAutoScripturePin
+        toggleAutoScripturePin,
+        pingRemoteRecognizer
     } from "../../../utils/scripture/autoService"
     import {
         formatAutoDisplayCountdown,
@@ -113,6 +114,13 @@
     let remoteUrlInput = ""
     let remoteStatusMessage = ""
     let remoteConnected = false
+    let remoteLatency: number | null = null
+    let remoteLastPingAt: number | null = null
+    let remoteLatencyDisplay = "—"
+    let remoteHeartbeatLabel = ""
+    let remoteHeartbeatTitle = ""
+    let remotePingDisabled = false
+    let remotePinging = false
     let startButtonLabel = "Start listening"
     let isRemoteMode = false
     let nextAutoId: string | null = null
@@ -155,6 +163,11 @@
     $: remoteUrlInput = $scriptureAutoSettings.remoteServiceUrl || ""
     $: remoteConnected = Boolean($scriptureAutoState.remoteConnected)
     $: remoteStatusMessage = $scriptureAutoState.remoteStatus || ""
+    $: remoteLatency =
+        typeof $scriptureAutoState.remoteLatencyMs === "number"
+            ? $scriptureAutoState.remoteLatencyMs
+            : null
+    $: remoteLastPingAt = $scriptureAutoState.remoteLastPingAt || null
     $: isRemoteMode = recognizerMode === "remote"
     $: nextAutoId = $scriptureAutoState.nextAutoApplyId || null
     $: nextAutoAt = $scriptureAutoState.nextAutoApplyAt || null
@@ -168,6 +181,7 @@
         const statusLower = remoteStatusMessage.toLowerCase()
         const remoteBusy = statusLower.startsWith("connecting") || statusLower.startsWith("reconnecting")
         const remoteErrored = statusLower.startsWith("error")
+        remotePinging = statusLower.startsWith("pinging")
         startButtonLabel = isRemoteMode
             ? remoteConnected
                 ? "Disconnect"
@@ -180,6 +194,18 @@
                 ? "Stop listening"
                 : "Start listening"
     }
+
+    $: remoteLatencyDisplay =
+        remoteLatency !== null
+            ? `${remoteLatency} ms`
+            : remoteConnected && remotePinging
+            ? "Measuring…"
+            : remoteConnected
+            ? "—"
+            : "—"
+    $: remoteHeartbeatLabel = remoteLastPingAt ? formatRelative(remoteLastPingAt) : ""
+    $: remoteHeartbeatTitle = remoteLastPingAt ? formatTimestamp(remoteLastPingAt) : ""
+    $: remotePingDisabled = !remoteConnected || remotePinging
 
     $: {
         const storeSeconds = Math.round(($scriptureAutoSettings.dedupeWindowMs ?? 15000) / 1000)
@@ -409,6 +435,10 @@
     function handleRemoteUrlInput(event: Event) {
         remoteUrlInput = (event.target as HTMLInputElement).value
         scriptureAutoSettings.update((settings) => ({ ...settings, remoteServiceUrl: remoteUrlInput }))
+    }
+
+    function handleRemotePing() {
+        pingRemoteRecognizer()
     }
 
     function scrollToSection(id: string) {
@@ -687,6 +717,31 @@
                                     {#if remoteStatusMessage}
                                         <p class="status remote-status">{remoteStatusMessage}</p>
                                     {/if}
+                                    <div class="remote-metrics">
+                                        <div class="metric">
+                                            <span class="label">Latency</span>
+                                            <span class="value" class:muted={remoteLatency === null}>
+                                                {remoteLatencyDisplay}
+                                            </span>
+                                        </div>
+                                        <div class="metric">
+                                            <span class="label">Last heartbeat</span>
+                                            <span
+                                                class="value"
+                                                class:muted={!remoteHeartbeatLabel}
+                                                title={remoteHeartbeatTitle || undefined}
+                                            >
+                                                {remoteHeartbeatLabel || "—"}
+                                            </span>
+                                        </div>
+                                        <button
+                                            class="text ping-button"
+                                            on:click={handleRemotePing}
+                                            disabled={remotePingDisabled}
+                                        >
+                                            Ping remote
+                                        </button>
+                                    </div>
                                 </div>
                             {/if}
                         {:else}
@@ -1215,6 +1270,39 @@
     .remote-config input:focus {
         outline: none;
         border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    .remote-metrics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        align-items: center;
+        font-size: 0.78rem;
+    }
+
+    .remote-metrics .metric {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 120px;
+    }
+
+    .remote-metrics .metric .label {
+        opacity: 0.7;
+        font-weight: 500;
+    }
+
+    .remote-metrics .metric .value {
+        font-weight: 600;
+    }
+
+    .remote-metrics .metric .value.muted {
+        opacity: 0.6;
+        font-weight: 500;
+    }
+
+    .remote-metrics .ping-button {
+        margin-left: auto;
     }
 
     .remote-status {

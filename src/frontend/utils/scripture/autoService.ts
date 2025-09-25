@@ -52,6 +52,10 @@ let remoteSocket: WebSocket | null = null
 let remoteReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let remoteManualDisconnect = false
 let remoteReconnectAttempts = 0
+let remoteLatencyValue: number | null = null
+let remoteLastPingAtValue: number | null = null
+let remotePingStart: number | null = null
+let remotePingTimeout: ReturnType<typeof setTimeout> | null = null
 let lastRemoteConfig: { language: string | null; bibleId: string | null; vocabularyKey: string | null } = {
     language: null,
     bibleId: null,
@@ -74,6 +78,7 @@ const MAX_TRANSCRIPT_ITEMS = 200
 const MAX_IMPORTED_QUEUE_ITEMS = 12
 const MAX_IMPORTED_HISTORY_ITEMS = 40
 const MAX_VOCABULARY_ITEMS = 256
+const REMOTE_PING_TIMEOUT_MS = 5000
 
 const ORDINAL_WORDS: Record<string, string> = { 1: "First", 2: "Second", 3: "Third" }
 const ROMAN_NUMERALS: Record<string, string> = { 1: "I", 2: "II", 3: "III" }
@@ -523,6 +528,34 @@ function updateState(partial: Partial<ScriptureAutoState>) {
     scriptureAutoState.update((state) => ({ ...state, ...partial }))
 }
 
+function setRemoteLatency(latency: number | null, timestamp: number | null = null) {
+    const normalizedLatency =
+        typeof latency === "number" && Number.isFinite(latency) ? Math.max(0, Math.round(latency)) : null
+    const normalizedTimestamp = timestamp ?? (normalizedLatency !== null ? Date.now() : null)
+
+    if (
+        remoteLatencyValue === normalizedLatency &&
+        remoteLastPingAtValue === (normalizedTimestamp ?? null)
+    ) {
+        return
+    }
+
+    remoteLatencyValue = normalizedLatency
+    remoteLastPingAtValue = normalizedTimestamp ?? null
+
+    updateState({
+        remoteLatencyMs: normalizedLatency,
+        remoteLastPingAt: normalizedTimestamp ?? null
+    })
+}
+
+function clearRemotePingTimer() {
+    if (remotePingTimeout) {
+        clearTimeout(remotePingTimeout)
+        remotePingTimeout = null
+    }
+}
+
 function setRecognizerMode(mode: RecognizerMode) {
     if (currentRecognizerMode === mode) return
     currentRecognizerMode = mode
@@ -533,6 +566,11 @@ function setRecognizerMode(mode: RecognizerMode) {
 function setRemoteConnectedState(value: boolean) {
     if (remoteConnected === value) return
     remoteConnected = value
+    if (!value) {
+        remotePingStart = null
+        clearRemotePingTimer()
+        setRemoteLatency(null)
+    }
     updateState({ remoteConnected: value })
 }
 
@@ -672,6 +710,34 @@ function processRemotePayload(raw: unknown) {
         } catch (error) {
             console.error("Failed to send remote pong", error)
         }
+        setRemoteLatency(remoteLatencyValue, Date.now())
+        return
+    }
+
+    if (type === "pong") {
+        const now = Date.now()
+        const awaited = remotePingStart !== null
+        const candidateStart =
+            typeof payload.received === "number" && Number.isFinite(payload.received)
+                ? payload.received
+                : typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp)
+                ? payload.timestamp
+                : remotePingStart
+
+        remotePingStart = null
+        clearRemotePingTimer()
+
+        if (typeof candidateStart === "number" && Number.isFinite(candidateStart)) {
+            const latency = Math.max(0, now - candidateStart)
+            setRemoteLatency(latency, now)
+            setRemoteStatus(`Connected (${latency} ms)`)
+            if (awaited) setStatus(`Remote recognizer responded in ${latency} ms.`)
+        } else {
+            setRemoteLatency(null, now)
+            if (awaited) setStatus("Remote recognizer responded.")
+            setRemoteStatus("Connected")
+        }
+
         return
     }
 
@@ -815,6 +881,9 @@ function connectRemoteRecognizer(): boolean {
         setRemoteStatus("Connected")
         setListeningState(true)
         setStatus("Connected to remote recognizer.")
+        remotePingStart = null
+        clearRemotePingTimer()
+        setRemoteLatency(null, Date.now())
         lastRemoteConfig = { language: null, bibleId: null, vocabularyKey: null }
         sendRemoteConfiguration(true)
     }
@@ -859,6 +928,9 @@ function connectRemoteRecognizer(): boolean {
 function disconnectRemoteRecognizer(message?: string, manual = false) {
     clearRemoteReconnectTimer()
     remoteManualDisconnect = manual
+    remotePingStart = null
+    clearRemotePingTimer()
+    setRemoteLatency(null)
 
     if (remoteSocket) {
         try {
@@ -873,6 +945,51 @@ function disconnectRemoteRecognizer(message?: string, manual = false) {
     setListeningState(false)
     setRemoteStatus("Disconnected")
     if (message) setStatus(message)
+    else if (!manual) setStatus("Remote recognizer disconnected.")
+}
+
+function requestRemotePing(): boolean {
+    const settings = get(scriptureAutoSettings)
+    if (resolveRecognizerMode(settings) !== "remote") {
+        setStatus("Switch to the remote recognizer to send a ping.")
+        return false
+    }
+
+    if (!remoteSocket || remoteSocket.readyState !== WebSocket.OPEN) {
+        setRemoteStatus("Disconnected")
+        setStatus("Remote recognizer is not connected.")
+        return false
+    }
+
+    if (remotePingStart !== null) {
+        setStatus("Ping already in progress…")
+        return false
+    }
+
+    try {
+        const timestamp = Date.now()
+        remotePingStart = timestamp
+        clearRemotePingTimer()
+        setRemoteLatency(null, timestamp)
+        setRemoteStatus("Pinging…")
+        setStatus("Pinging remote recognizer…")
+        remoteSocket.send(JSON.stringify({ type: "ping", timestamp }))
+        remotePingTimeout = setTimeout(() => {
+            if (remotePingStart !== timestamp) return
+            remotePingStart = null
+            setRemoteStatus("Ping timed out")
+            setStatus("Remote recognizer did not respond to ping.")
+            setRemoteLatency(null, Date.now())
+        }, REMOTE_PING_TIMEOUT_MS)
+        return true
+    } catch (error) {
+        console.error("Failed to ping remote recognizer", error)
+        remotePingStart = null
+        setRemoteStatus("Ping failed")
+        setStatus("Unable to ping the remote recognizer.")
+        setRemoteLatency(null, Date.now())
+        return false
+    }
 }
 
 function recordDetections(suggestions: AutoDetectedScripture[], source: string) {
@@ -1682,6 +1799,9 @@ function sanitizeSessionState(value: any): Partial<ScriptureAutoState> {
     if (!value || typeof value !== "object") return {}
     const partial: Partial<ScriptureAutoState> = {}
 
+    if (hasOwn(value, "status")) partial.status = sanitizeString(value.status)
+    if (hasOwn(value, "supported")) partial.supported = Boolean(value.supported)
+    if (hasOwn(value, "listening")) partial.listening = Boolean(value.listening)
     if (hasOwn(value, "lastHeardAt")) partial.lastHeardAt = toNullableNumber(value.lastHeardAt)
     if (hasOwn(value, "lastReference")) partial.lastReference = sanitizeOptionalString(value.lastReference)
     if (hasOwn(value, "lastSource")) partial.lastSource = sanitizeOptionalString(value.lastSource)
@@ -1699,6 +1819,15 @@ function sanitizeSessionState(value: any): Partial<ScriptureAutoState> {
     if (hasOwn(value, "currentAuto")) partial.currentAuto = Boolean(value.currentAuto)
     if (hasOwn(value, "currentDisplayed")) partial.currentDisplayed = Boolean(value.currentDisplayed)
     if (hasOwn(value, "pinned")) partial.pinned = Boolean(value.pinned)
+    if (hasOwn(value, "recognizerMode")) {
+        const mode = sanitizeString(value.recognizerMode).toLowerCase()
+        partial.recognizerMode = mode === "remote" ? "remote" : "browser"
+    }
+    if (hasOwn(value, "remoteConnected")) partial.remoteConnected = Boolean(value.remoteConnected)
+    if (hasOwn(value, "remoteStatus")) partial.remoteStatus = sanitizeOptionalString(value.remoteStatus)
+    if (hasOwn(value, "remoteLatencyMs")) partial.remoteLatencyMs = toNullableNumber(value.remoteLatencyMs)
+    if (hasOwn(value, "remoteLastPingAt")) partial.remoteLastPingAt = toNullableNumber(value.remoteLastPingAt)
+    if (hasOwn(value, "partialTranscript")) partial.partialTranscript = sanitizeString(value.partialTranscript)
     if (hasOwn(value, "nextAutoClearAt")) partial.nextAutoClearAt = toNullableNumber(value.nextAutoClearAt)
     if (hasOwn(value, "nextAutoClearDelayMs"))
         partial.nextAutoClearDelayMs = toNullableNumber(value.nextAutoClearDelayMs)
@@ -1906,6 +2035,11 @@ export function processAutoScriptureManualInput(input: string, bibleId?: string)
 
 export function applyAutoScriptureSuggestion(suggestion: AutoDetectedScripture, auto = false) {
     applySuggestion(suggestion, auto)
+}
+
+export function pingRemoteRecognizer(): boolean {
+    initializeAutoScriptureService()
+    return requestRemotePing()
 }
 
 export function isAutoScriptureSupported() {

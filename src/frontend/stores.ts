@@ -186,6 +186,8 @@ export const scriptureAutoState: Writable<ScriptureAutoState> = writable({
     recognizerMode: "browser",
     remoteConnected: false,
     remoteStatus: null,
+    remoteLatencyMs: null,
+    remoteLastPingAt: null,
     nextAutoApplyId: null,
     nextAutoApplyAt: null,
     nextAutoApplyDelayMs: null,

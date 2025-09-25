@@ -243,6 +243,13 @@
     let queueLength = 0
     let previousQueueLength = 0
     let autoDisplayEnabled = false
+    let autoRecognizerMode: "browser" | "remote" = "browser"
+    let remoteModeActive = false
+    let remoteConnectedState = false
+    let remoteStatusLabel = ""
+    let remoteLatencyMs: number | null = null
+    let remoteHeartbeatAt: number | null = null
+    let remoteIndicatorTitle = ""
     let listenerId = receiveMain(Main.BIBLE, (data) => {
         if (data.error === "not_found") {
             notLoaded = true
@@ -1056,6 +1063,15 @@
 
     $: queueLength = $scriptureAutoQueue.length
     $: autoDisplayEnabled = $scriptureAutoSettings.autoDisplay
+    $: autoRecognizerMode = ($scriptureAutoSettings.recognizerMode as "browser" | "remote") || "browser"
+    $: remoteModeActive = autoRecognizerMode === "remote"
+    $: remoteConnectedState = Boolean($scriptureAutoState.remoteConnected)
+    $: remoteStatusLabel = ($scriptureAutoState.remoteStatus || "").trim()
+    $: remoteLatencyMs =
+        typeof $scriptureAutoState.remoteLatencyMs === "number"
+            ? $scriptureAutoState.remoteLatencyMs
+            : null
+    $: remoteHeartbeatAt = $scriptureAutoState.remoteLastPingAt || null
     $: nextAutoApplyId = $scriptureAutoState.nextAutoApplyId || null
     $: nextAutoApplyAt = $scriptureAutoState.nextAutoApplyAt || null
     $: nextAutoClearAt = $scriptureAutoState.nextAutoClearAt || null
@@ -1069,7 +1085,48 @@
     $: autoListening = $scriptureAutoState.listening
     $: autoStatusText = ($scriptureAutoState.status || "").trim()
     $: {
-        const statusSuffix = autoStatusText ? ` — ${autoStatusText}` : ""
+        if (!remoteModeActive) {
+            remoteIndicatorTitle = ""
+        } else if (remoteLatencyMs !== null) {
+            const heartbeat = remoteHeartbeatAt ? formatRelative(remoteHeartbeatAt) : ""
+            const latencyLabel = `${remoteLatencyMs} ms`
+            remoteIndicatorTitle = heartbeat
+                ? `Remote recognizer connected · ${latencyLabel} · Heartbeat ${heartbeat}`
+                : `Remote recognizer connected · ${latencyLabel}`
+        } else if (remoteStatusLabel) {
+            remoteIndicatorTitle = remoteStatusLabel.toLowerCase().startsWith("remote")
+                ? remoteStatusLabel
+                : `Remote ${remoteStatusLabel}`
+        } else {
+            remoteIndicatorTitle = remoteConnectedState
+                ? "Remote recognizer connected"
+                : "Remote recognizer disconnected"
+        }
+    }
+    $: {
+        const statusParts: string[] = []
+        if (autoStatusText) statusParts.push(autoStatusText)
+
+        if (remoteModeActive) {
+            let remotePart = ""
+            if (remoteLatencyMs !== null) {
+                remotePart = `Remote latency ${remoteLatencyMs} ms`
+                if (remoteHeartbeatAt) {
+                    const heartbeatRelative = formatRelative(remoteHeartbeatAt)
+                    if (heartbeatRelative) remotePart += ` (heartbeat ${heartbeatRelative})`
+                }
+            } else if (remoteStatusLabel) {
+                remotePart = remoteStatusLabel.toLowerCase().startsWith("remote")
+                    ? remoteStatusLabel
+                    : `Remote ${remoteStatusLabel}`
+            } else {
+                remotePart = remoteConnectedState ? "Remote connected" : "Remote disconnected"
+            }
+
+            if (remotePart) statusParts.push(remotePart)
+        }
+
+        const statusSuffix = statusParts.length ? ` — ${statusParts.join(" · ")}` : ""
         const countdownParts: string[] = []
         if (autoDisplayEnabled && autoCountdownLabel) {
             countdownParts.push(`Next auto display in ${autoCountdownLabel}.`)
@@ -1113,6 +1170,15 @@
         if (!hasActiveAutoClearCountdown(nextAutoClearAt, autoClearDelay, autoPinned, autoCurrentlyDisplayed)) {
             clearAutoClearCountdownTimer()
         }
+    }
+
+    function formatRelative(value: number | null | undefined) {
+        if (!value) return ""
+        const diff = Date.now() - value
+        if (diff < 60_000) return "moments ago"
+        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+        return new Date(value).toLocaleDateString()
     }
 
     $: {
@@ -1526,7 +1592,15 @@
             on:click={handleAutoButtonClick}
             isActive={autoPanelOpen || autoListening}
         >
-            <span class="auto-toggle" class:listening={autoListening}>
+            <span class="auto-toggle" class:listening={autoListening} class:remote={remoteModeActive}>
+                {#if remoteModeActive}
+                    <span
+                        class="remote-indicator"
+                        class:connected={remoteConnectedState}
+                        title={remoteIndicatorTitle || undefined}
+                        aria-hidden="true"
+                    />
+                {/if}
                 <Icon size={1.1} id="voice" white={!autoPanelOpen && !autoListening} />
                 {#if autoListening}
                     <span class="listening-indicator" aria-hidden="true" />
@@ -1585,6 +1659,27 @@
 
     .auto-toggle.listening {
         color: var(--secondary);
+    }
+
+    .auto-toggle.remote {
+        padding-right: 8px;
+    }
+
+    .auto-toggle .remote-indicator {
+        position: absolute;
+        top: -4px;
+        right: -8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        background: transparent;
+    }
+
+    .auto-toggle .remote-indicator.connected {
+        background: var(--secondary);
+        border-color: var(--secondary);
+        box-shadow: 0 0 6px rgba(123, 220, 255, 0.6);
     }
 
     .auto-toggle .listening-indicator {

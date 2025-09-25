@@ -109,6 +109,8 @@
             recognizerMode: "browser",
             remoteConnected: false,
             remoteStatus: null,
+            remoteLatencyMs: null,
+            remoteLastPingAt: null,
             nextAutoApplyId: null,
             nextAutoApplyAt: null,
             nextAutoApplyDelayMs: null,
@@ -126,7 +128,9 @@
             manualSubmissions: 0,
             dismissed: 0,
             confidenceSamples: 0,
-            averageConfidence: 0
+            averageConfidence: 0,
+            suppressedDuplicates: 0,
+            suppressedLowConfidence: 0
         })
         deletedShows.set([])
         renamedShows.set([])

@@ -52,6 +52,8 @@ When the remote recogniser resolves passages itself, it can emit structured dete
 
 Suggestions can also provide an `osis` key (for example, `"John.3.16-John.3.17"`) or a `verses` array when working with multi-lingual book names. Any missing fields fall back to the currently active translation, so even a minimal payload like `{ "type": "suggestion", "osis": "John.3.16", "bibleId": "kjv" }` is enough to queue a verse instantly.
 
+Operators can trigger a manual ping from the AutoScripture dashboard to check the remote pipeline. The panel publishes the current round-trip latency and the last heartbeat alongside the connection status, so teams can confirm that a cloud recogniser or an on-prem gateway is still responsive before relying on automated cues.
+
 ### Streaming & Latency
 
 The ASR engine should process audio in streaming mode, outputting partial transcriptions as audio arrives. Vosk's streaming mode and voice-activity detection minimize delay. Batch-oriented models (such as Whisper without streaming support) process audio in chunks, which introduces additional latency. The system should wait until it hears the complete reference (book name, chapter, and verse numbers) before triggering the display to avoid false matches. Detecting patterns like `<Book> <Chapter> verse <Verse>` or `<Book> <Chapter>:<Verse>` in partial transcripts is effective.
