@@ -531,10 +531,16 @@ function registerSuggestion(info: RegisterInfo, runtime: RegisterRuntime): AutoD
     const queueKey = buildQueueKey(bibleId, bookNumber, chapterNumber, startVerse, endVerse)
     const timestamp = Date.now()
 
-    if (runtime.existingKeys.has(queueKey)) return null
+    if (runtime.existingKeys.has(queueKey)) {
+        recordSuppressed("duplicate")
+        return null
+    }
 
     const lastProcessed = processedReferences.get(queueKey)
-    if (lastProcessed && timestamp - lastProcessed < runtime.dedupeWindow) return null
+    if (lastProcessed && timestamp - lastProcessed < runtime.dedupeWindow) {
+        recordSuppressed("duplicate")
+        return null
+    }
 
     const verseData = collectVerses(info.bible, bookNumber, chapterNumber, startVerse, endVerse)
     if (!verseData) return null
@@ -555,7 +561,10 @@ function registerSuggestion(info: RegisterInfo, runtime: RegisterRuntime): AutoD
     if (span >= 8) confidence -= 0.05
     confidence = Math.max(0.35, Math.min(0.99, confidence))
 
-    if (confidence < runtime.minConfidence) return null
+    if (confidence < runtime.minConfidence) {
+        recordSuppressed("lowConfidence")
+        return null
+    }
 
     const suggestion: AutoDetectedScripture = {
         id: `${queueKey}:${timestamp}`,
@@ -627,6 +636,28 @@ function updateDetectionStats(entries: AutoDetectedScripture[], source: string) 
             manualDetections: stats.manualDetections + (source === "manual" ? entries.length : 0),
             confidenceSamples: samples,
             averageConfidence: samples ? average : 0,
+            lastUpdated: Date.now()
+        }
+    })
+}
+
+function recordSuppressed(reason: "duplicate" | "lowConfidence") {
+    scriptureAutoStats.update((stats) => {
+        const suppressedDuplicates =
+            stats.suppressedDuplicates != null ? stats.suppressedDuplicates : 0
+        const suppressedLowConfidence =
+            stats.suppressedLowConfidence != null ? stats.suppressedLowConfidence : 0
+
+        return {
+            ...stats,
+            suppressedDuplicates:
+                reason === "duplicate"
+                    ? suppressedDuplicates + 1
+                    : suppressedDuplicates,
+            suppressedLowConfidence:
+                reason === "lowConfidence"
+                    ? suppressedLowConfidence + 1
+                    : suppressedLowConfidence,
             lastUpdated: Date.now()
         }
     })

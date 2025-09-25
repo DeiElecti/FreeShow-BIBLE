@@ -183,6 +183,8 @@
     $: manualSubmissions = stats.manualSubmissions
     $: dismissedCount = stats.dismissed
     $: displayedCount = stats.displayed
+    $: suppressedDuplicates = stats.suppressedDuplicates ?? 0
+    $: suppressedLowConfidence = stats.suppressedLowConfidence ?? 0
 
     function handleToggleClick() {
         toggleAutoScriptureListening()
@@ -664,6 +666,14 @@
                         <div class="stat">
                             <strong>{dismissedCount}</strong>
                             <span>Dismissed</span>
+                        </div>
+                        <div class="stat">
+                            <strong>{suppressedDuplicates}</strong>
+                            <span>Suppressed duplicates</span>
+                        </div>
+                        <div class="stat">
+                            <strong>{suppressedLowConfidence}</strong>
+                            <span>Low-confidence filtered</span>
                         </div>
                         <div class="stat">
                             <strong>{detectionAverage !== null ? `${detectionAverage}%` : "—"}</strong>

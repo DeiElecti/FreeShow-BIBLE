@@ -155,7 +155,9 @@ function createDefaultStats(): ScriptureAutoStats {
         manualSubmissions: 0,
         dismissed: 0,
         confidenceSamples: 0,
-        averageConfidence: 0
+        averageConfidence: 0,
+        suppressedDuplicates: 0,
+        suppressedLowConfidence: 0
     }
 }
 
@@ -453,6 +455,16 @@ function applyConfidenceThreshold(minConfidence: number) {
         })
 
         if (filtered.length === queue.length) return queue
+
+        const removedCount = queue.length - filtered.length
+        if (removedCount > 0) {
+            scriptureAutoStats.update((stats) => ({
+                ...stats,
+                suppressedLowConfidence:
+                    (stats.suppressedLowConfidence ?? 0) + removedCount,
+                lastUpdated: Date.now()
+            }))
+        }
 
         if (pendingAutoApplyId && !filtered.some((item) => item.id === pendingAutoApplyId)) {
             clearAutoApplyTimer()
@@ -1444,7 +1456,9 @@ function sanitizeStats(value: any): ScriptureAutoStats {
         manualSubmissions: toCount(value?.manualSubmissions),
         dismissed: toCount(value?.dismissed),
         confidenceSamples: toCount(value?.confidenceSamples),
-        averageConfidence: toNumber(value?.averageConfidence, 0, 0, 1)
+        averageConfidence: toNumber(value?.averageConfidence, 0, 0, 1),
+        suppressedDuplicates: toCount(value?.suppressedDuplicates),
+        suppressedLowConfidence: toCount(value?.suppressedLowConfidence)
     }
 }
 

@@ -197,7 +197,9 @@ export const scriptureAutoStats: Writable<ScriptureAutoStats> = writable({
     manualSubmissions: 0,
     dismissed: 0,
     confidenceSamples: 0,
-    averageConfidence: 0
+    averageConfidence: 0,
+    suppressedDuplicates: 0,
+    suppressedLowConfidence: 0
 })
 
 // EDIT

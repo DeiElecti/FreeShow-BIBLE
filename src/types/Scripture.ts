@@ -168,4 +168,6 @@ export interface ScriptureAutoStats {
     dismissed: number
     confidenceSamples: number
     averageConfidence: number
+    suppressedDuplicates: number
+    suppressedLowConfidence: number
 }
