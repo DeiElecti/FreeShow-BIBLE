@@ -79,6 +79,7 @@
             themeId: "classic",
             minimumConfidence: 0.55,
             autoDisplayDelayMs: 0,
+            autoClearDelayMs: 0,
             languageOverrides: {},
             recognizerMode: "browser",
             remoteServiceUrl: "",
@@ -110,7 +111,9 @@
             remoteStatus: null,
             nextAutoApplyId: null,
             nextAutoApplyAt: null,
-            nextAutoApplyDelayMs: null
+            nextAutoApplyDelayMs: null,
+            nextAutoClearAt: null,
+            nextAutoClearDelayMs: null
         })
         scriptureAutoStats.set({
             startedAt: Date.now(),

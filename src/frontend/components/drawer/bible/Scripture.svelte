@@ -49,7 +49,9 @@
     } from "../../../utils/scripture/autoService"
     import {
         formatAutoDisplayCountdown,
-        hasActiveAutoDisplayCountdown
+        formatAutoClearCountdown,
+        hasActiveAutoDisplayCountdown,
+        hasActiveAutoClearCountdown
     } from "../../../utils/scripture/countdown"
 
     export let active: string | null
@@ -232,6 +234,12 @@
     let nextAutoApplyAt: number | null = null
     let autoCountdownLabel = ""
     let autoCountdownTimer: ReturnType<typeof setInterval> | null = null
+    let autoClearCountdownLabel = ""
+    let autoClearCountdownTimer: ReturnType<typeof setInterval> | null = null
+    let nextAutoClearAt: number | null = null
+    let autoClearDelay = 0
+    let autoPinned = false
+    let autoCurrentlyDisplayed = false
     let queueLength = 0
     let previousQueueLength = 0
     let autoDisplayEnabled = false
@@ -1050,6 +1058,10 @@
     $: autoDisplayEnabled = $scriptureAutoSettings.autoDisplay
     $: nextAutoApplyId = $scriptureAutoState.nextAutoApplyId || null
     $: nextAutoApplyAt = $scriptureAutoState.nextAutoApplyAt || null
+    $: nextAutoClearAt = $scriptureAutoState.nextAutoClearAt || null
+    $: autoClearDelay = $scriptureAutoSettings.autoClearDelayMs ?? 0
+    $: autoPinned = Boolean($scriptureAutoState.pinned)
+    $: autoCurrentlyDisplayed = Boolean($scriptureAutoState.currentDisplayed)
     $: {
         if (!autoPanelOpen && !autoDisplayEnabled && queueLength > previousQueueLength) autoPanelOpen = true
         previousQueueLength = queueLength
@@ -1058,9 +1070,14 @@
     $: autoStatusText = ($scriptureAutoState.status || "").trim()
     $: {
         const statusSuffix = autoStatusText ? ` — ${autoStatusText}` : ""
-        const countdownSuffix = autoDisplayEnabled && autoCountdownLabel
-            ? ` Next auto display in ${autoCountdownLabel}.`
-            : ""
+        const countdownParts: string[] = []
+        if (autoDisplayEnabled && autoCountdownLabel) {
+            countdownParts.push(`Next auto display in ${autoCountdownLabel}.`)
+        }
+        if (autoClearCountdownLabel) {
+            countdownParts.push(`Auto clear in ${autoClearCountdownLabel}.`)
+        }
+        const countdownSuffix = countdownParts.length ? ` ${countdownParts.join(" ")}` : ""
         autoButtonTitle = `${AUTO_BUTTON_TITLE}${statusSuffix}.${countdownSuffix} Shift+Click to toggle listening.`
     }
 
@@ -1078,6 +1095,26 @@
         }
     }
 
+    function clearAutoClearCountdownTimer() {
+        if (autoClearCountdownTimer) {
+            clearInterval(autoClearCountdownTimer)
+            autoClearCountdownTimer = null
+        }
+    }
+
+    function refreshAutoClearCountdownLabel() {
+        autoClearCountdownLabel = formatAutoClearCountdown(
+            nextAutoClearAt,
+            autoClearDelay,
+            autoPinned,
+            autoCurrentlyDisplayed
+        )
+
+        if (!hasActiveAutoClearCountdown(nextAutoClearAt, autoClearDelay, autoPinned, autoCurrentlyDisplayed)) {
+            clearAutoClearCountdownTimer()
+        }
+    }
+
     $: {
         const shouldTrackCountdown =
             autoDisplayEnabled && Boolean(nextAutoApplyId) && hasActiveAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)
@@ -1091,7 +1128,27 @@
         }
     }
 
-    onDestroy(() => clearAutoCountdownTimer())
+    $: {
+        const shouldTrackAutoClear = hasActiveAutoClearCountdown(
+            nextAutoClearAt,
+            autoClearDelay,
+            autoPinned,
+            autoCurrentlyDisplayed
+        )
+
+        if (shouldTrackAutoClear) {
+            if (!autoClearCountdownTimer) autoClearCountdownTimer = setInterval(refreshAutoClearCountdownLabel, 200)
+            refreshAutoClearCountdownLabel()
+        } else {
+            clearAutoClearCountdownTimer()
+            if (!shouldTrackAutoClear) autoClearCountdownLabel = ""
+        }
+    }
+
+    onDestroy(() => {
+        clearAutoCountdownTimer()
+        clearAutoClearCountdownTimer()
+    })
 
     $: currentHistory = clone($scriptureHistory.filter((a) => a.id === bibles[0]?.id)).reverse()
 
@@ -1477,8 +1534,15 @@
                 {#if queueLength}
                     <span class="badge">{queueLength}</span>
                 {/if}
-                {#if autoDisplayEnabled && autoCountdownLabel}
-                    <span class="countdown-badge">{autoCountdownLabel}</span>
+                {#if (autoDisplayEnabled && autoCountdownLabel) || autoClearCountdownLabel}
+                    <div class="countdown-stack">
+                        {#if autoDisplayEnabled && autoCountdownLabel}
+                            <span class="countdown-badge" title="Auto display countdown">{autoCountdownLabel}</span>
+                        {/if}
+                        {#if autoClearCountdownLabel}
+                            <span class="countdown-badge auto-clear" title="Auto clear countdown">clr {autoClearCountdownLabel}</span>
+                        {/if}
+                    </div>
                 {/if}
             </span>
         </MaterialButton>
@@ -1548,15 +1612,28 @@
         text-align: center;
     }
 
-    .auto-toggle .countdown-badge {
+    .auto-toggle .countdown-stack {
         position: absolute;
-        bottom: -10px;
         right: -10px;
+        bottom: -10px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+    }
+
+    .auto-toggle .countdown-badge {
         font-size: 0.65em;
         background: rgba(0, 0, 0, 0.6);
         color: var(--secondary);
         padding: 1px 6px;
         border-radius: 999px;
+        white-space: nowrap;
+    }
+
+    .auto-toggle .countdown-badge.auto-clear {
+        background: rgba(255, 120, 120, 0.2);
+        color: #ffb3b3;
     }
 
     .main {

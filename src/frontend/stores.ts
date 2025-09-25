@@ -156,6 +156,7 @@ export const scriptureAutoSettings: Writable<ScriptureAutoSettings> = writable({
     themeId: "classic",
     minimumConfidence: 0.55,
     autoDisplayDelayMs: 0,
+    autoClearDelayMs: 0,
     languageOverrides: {},
     recognizerMode: "browser",
     remoteServiceUrl: ""
@@ -187,7 +188,9 @@ export const scriptureAutoState: Writable<ScriptureAutoState> = writable({
     remoteStatus: null,
     nextAutoApplyId: null,
     nextAutoApplyAt: null,
-    nextAutoApplyDelayMs: null
+    nextAutoApplyDelayMs: null,
+    nextAutoClearAt: null,
+    nextAutoClearDelayMs: null
 })
 export const scriptureAutoHistory: Writable<AutoDetectedScripture[]> = writable([])
 export const scriptureAutoTranscript: Writable<AutoTranscriptEntry[]> = writable([])

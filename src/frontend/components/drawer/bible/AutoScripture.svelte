@@ -27,7 +27,9 @@
     } from "../../../utils/scripture/autoService"
     import {
         formatAutoDisplayCountdown,
-        hasActiveAutoDisplayCountdown
+        hasActiveAutoDisplayCountdown,
+        formatAutoClearCountdown,
+        hasActiveAutoClearCountdown
     } from "../../../utils/scripture/countdown"
     import {
         SCRIPTURE_AUTO_LANGUAGE_OPTIONS,
@@ -98,6 +100,9 @@
     let confidenceThreshold = 55
     let autoDelay = 0
     let autoDelayLabel = "Instant"
+    let autoClearControl = 0
+    let autoClearDelay = 0
+    let autoClearDelayLabel = "Off"
     let statusMessage = ""
     let partialTranscript = ""
     let listening = false
@@ -113,7 +118,10 @@
     let nextAutoId: string | null = null
     let nextAutoAt: number | null = null
     let autoCountdownLabel = ""
-    let countdownTimer: ReturnType<typeof setInterval> | null = null
+    let autoDisplayCountdownTimer: ReturnType<typeof setInterval> | null = null
+    let autoClearCountdownLabel = ""
+    let autoClearCountdownTimer: ReturnType<typeof setInterval> | null = null
+    let nextAutoClearAt: number | null = null
     let pinned = false
     let currentlyDisplaying = false
     let hasDisplayedReference = false
@@ -150,6 +158,7 @@
     $: isRemoteMode = recognizerMode === "remote"
     $: nextAutoId = $scriptureAutoState.nextAutoApplyId || null
     $: nextAutoAt = $scriptureAutoState.nextAutoApplyAt || null
+    $: nextAutoClearAt = $scriptureAutoState.nextAutoClearAt || null
     $: pinned = Boolean($scriptureAutoState.pinned)
     $: currentlyDisplaying = Boolean($scriptureAutoState.currentDisplayed)
     $: hasDisplayedReference = Boolean(
@@ -179,6 +188,12 @@
     $: confidenceThreshold = Math.round(($scriptureAutoSettings.minimumConfidence ?? 0.55) * 100)
     $: autoDelay = $scriptureAutoSettings.autoDisplayDelayMs ?? 0
     $: autoDelayLabel = formatDelay(autoDelay)
+    $: {
+        const storeClearMs = $scriptureAutoSettings.autoClearDelayMs ?? 0
+        if (storeClearMs !== autoClearControl) autoClearControl = storeClearMs
+    }
+    $: autoClearDelay = $scriptureAutoSettings.autoClearDelayMs ?? 0
+    $: autoClearDelayLabel = autoClearControl ? formatDelay(autoClearControl) : "Off"
 
     $: currentReference =
         $scriptureAutoState.currentReference || $scriptureAutoState.lastReference || "Waiting for a reference…"
@@ -446,32 +461,76 @@
         return `${seconds.toFixed(precision)} s`
     }
 
-    function clearCountdownTimer() {
-        if (countdownTimer) {
-            clearInterval(countdownTimer)
-            countdownTimer = null
+    function handleAutoClearChange(event: Event) {
+        const value = Number((event.target as HTMLInputElement).value)
+        scriptureAutoSettings.update((settings) => ({ ...settings, autoClearDelayMs: value }))
+    }
+
+    function clearAutoDisplayCountdownTimer() {
+        if (autoDisplayCountdownTimer) {
+            clearInterval(autoDisplayCountdownTimer)
+            autoDisplayCountdownTimer = null
         }
     }
 
-    function refreshAutoCountdown() {
+    function refreshAutoDisplayCountdown() {
         autoCountdownLabel = formatAutoDisplayCountdown(nextAutoAt, autoDisplay)
         if (!hasActiveAutoDisplayCountdown(nextAutoAt, autoDisplay)) {
-            clearCountdownTimer()
+            clearAutoDisplayCountdownTimer()
         }
     }
 
     $: {
-        const shouldTrackCountdown = Boolean(nextAutoId) && hasActiveAutoDisplayCountdown(nextAutoAt, autoDisplay)
-        if (shouldTrackCountdown) {
-            if (!countdownTimer) countdownTimer = setInterval(refreshAutoCountdown, 200)
-            refreshAutoCountdown()
+        const shouldTrackDisplay = Boolean(nextAutoId) && hasActiveAutoDisplayCountdown(nextAutoAt, autoDisplay)
+        if (shouldTrackDisplay) {
+            if (!autoDisplayCountdownTimer) autoDisplayCountdownTimer = setInterval(refreshAutoDisplayCountdown, 200)
+            refreshAutoDisplayCountdown()
         } else {
-            clearCountdownTimer()
-            if (!shouldTrackCountdown) autoCountdownLabel = ""
+            clearAutoDisplayCountdownTimer()
+            if (!shouldTrackDisplay) autoCountdownLabel = ""
         }
     }
 
-    onDestroy(() => clearCountdownTimer())
+    function clearAutoClearCountdownTimer() {
+        if (autoClearCountdownTimer) {
+            clearInterval(autoClearCountdownTimer)
+            autoClearCountdownTimer = null
+        }
+    }
+
+    function refreshAutoClearCountdown() {
+        autoClearCountdownLabel = formatAutoClearCountdown(
+            nextAutoClearAt,
+            autoClearDelay,
+            pinned,
+            currentlyDisplaying
+        )
+        if (!hasActiveAutoClearCountdown(nextAutoClearAt, autoClearDelay, pinned, currentlyDisplaying)) {
+            clearAutoClearCountdownTimer()
+        }
+    }
+
+    $: {
+        const shouldTrackClear = hasActiveAutoClearCountdown(
+            nextAutoClearAt,
+            autoClearDelay,
+            pinned,
+            currentlyDisplaying
+        )
+
+        if (shouldTrackClear) {
+            if (!autoClearCountdownTimer) autoClearCountdownTimer = setInterval(refreshAutoClearCountdown, 200)
+            refreshAutoClearCountdown()
+        } else {
+            clearAutoClearCountdownTimer()
+            if (!shouldTrackClear) autoClearCountdownLabel = ""
+        }
+    }
+
+    onDestroy(() => {
+        clearAutoDisplayCountdownTimer()
+        clearAutoClearCountdownTimer()
+    })
 
     function closePanel() {
         dispatch("close")
@@ -555,6 +614,8 @@
                     </div>
                     {#if pinned}
                         <p class="hint subtle">Auto display is paused while pinned.</p>
+                    {:else if autoClearCountdownLabel}
+                        <p class="hint subtle">Verse clears in {autoClearCountdownLabel}.</p>
                     {/if}
                     <footer class="preview-footer">
                         <span>{currentTranslation || "No translation selected"}</span>
@@ -691,6 +752,22 @@
                                     on:input={handleAutoDelayChange}
                                 />
                                 <span>{autoDelayLabel}</span>
+                            </div>
+                        </div>
+
+                        <div class="slider">
+                            <label for="auto-clear">Auto clear delay</label>
+                            <div class="range">
+                                <input
+                                    id="auto-clear"
+                                    type="range"
+                                    min="0"
+                                    max="60000"
+                                    step="1000"
+                                    bind:value={autoClearControl}
+                                    on:input={handleAutoClearChange}
+                                />
+                                <span>{autoClearDelayLabel}</span>
                             </div>
                         </div>
                     </div>

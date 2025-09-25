@@ -320,6 +320,10 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
                 typeof v?.autoDisplayDelayMs === "number" && Number.isFinite(v.autoDisplayDelayMs)
                     ? Math.min(Math.max(v.autoDisplayDelayMs, 0), 15000)
                     : 0,
+            autoClearDelayMs:
+                typeof v?.autoClearDelayMs === "number" && Number.isFinite(v.autoClearDelayMs)
+                    ? Math.min(Math.max(v.autoClearDelayMs, 0), 60000)
+                    : 0,
             languageOverrides: Object.fromEntries(
                 Object.entries(v?.languageOverrides || {}).filter((entry) => {
                     const [key, value] = entry

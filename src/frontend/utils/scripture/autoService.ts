@@ -45,6 +45,9 @@ let pendingAutoApplyId: string | null = null
 let pendingAutoApplyDelay = 0
 let pendingAutoApplyAt = 0
 let autoApplyStateActive = false
+let autoClearTimer: ReturnType<typeof setTimeout> | null = null
+let pendingAutoClearDelay = 0
+let pendingAutoClearAt = 0
 let remoteSocket: WebSocket | null = null
 let remoteReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let remoteManualDisconnect = false
@@ -202,6 +205,8 @@ function buildSessionSnapshot() {
         state.nextAutoApplyId = null
         state.nextAutoApplyAt = null
         state.nextAutoApplyDelayMs = null
+        state.nextAutoClearAt = null
+        state.nextAutoClearDelayMs = null
     }
 
     return {
@@ -427,10 +432,11 @@ scriptureAutoSettings.subscribe((settings) => {
 
     if (!settings.autoDisplay) {
         clearAutoApplyTimer()
-        return
+    } else if (queue.length) {
+        scheduleAutoApply(queue[0])
     }
 
-    if (queue.length) scheduleAutoApply(queue[0])
+    scheduleAutoClear(true)
 })
 
 scriptureAutoQueue.subscribe((queue) => {
@@ -468,6 +474,18 @@ function clearAutoApplyTimer() {
             nextAutoApplyAt: null,
             nextAutoApplyDelayMs: null
         })
+    }
+}
+
+function clearAutoClearTimer(updateStateValue = true) {
+    if (autoClearTimer) {
+        clearTimeout(autoClearTimer)
+        autoClearTimer = null
+    }
+    pendingAutoClearDelay = 0
+    pendingAutoClearAt = 0
+    if (updateStateValue) {
+        updateState({ nextAutoClearAt: null, nextAutoClearDelayMs: null })
     }
 }
 
@@ -555,10 +573,13 @@ function setPinnedState(value: boolean, options: { silent?: boolean } = {}) {
 
     if (normalized) {
         clearAutoApplyTimer()
+        clearAutoClearTimer()
         updateState({
             nextAutoApplyId: null,
             nextAutoApplyAt: null,
-            nextAutoApplyDelayMs: null
+            nextAutoApplyDelayMs: null,
+            nextAutoClearAt: null,
+            nextAutoClearDelayMs: null
         })
         if (!options.silent) setStatus("Current verse pinned. Auto display paused.")
         return
@@ -567,6 +588,7 @@ function setPinnedState(value: boolean, options: { silent?: boolean } = {}) {
     if (!options.silent) setStatus("Pin removed. Auto display resumed.")
     const queue = get(scriptureAutoQueue)
     if (queue.length) scheduleAutoApply(queue[0])
+    scheduleAutoClear(true)
 }
 
 function clearRemoteReconnectTimer() {
@@ -996,6 +1018,92 @@ function scheduleAutoApply(suggestion: AutoDetectedScripture | undefined) {
     }, delay)
 }
 
+function scheduleAutoClear(force = false) {
+    const state = get(scriptureAutoState)
+
+    if (!state.currentDisplayed) {
+        clearAutoClearTimer()
+        return
+    }
+
+    if (pinned) {
+        clearAutoClearTimer()
+        return
+    }
+
+    const settings = get(scriptureAutoSettings)
+    const delay = Math.max(0, settings.autoClearDelayMs ?? 0)
+
+    if (!delay) {
+        clearAutoClearTimer()
+        return
+    }
+
+    if (!force && autoClearTimer && pendingAutoClearDelay === delay) return
+
+    clearAutoClearTimer(false)
+    const scheduledAt = Date.now() + delay
+    pendingAutoClearDelay = delay
+    pendingAutoClearAt = scheduledAt
+    updateState({ nextAutoClearAt: scheduledAt, nextAutoClearDelayMs: delay })
+
+    autoClearTimer = setTimeout(() => {
+        autoClearTimer = null
+        pendingAutoClearDelay = 0
+        pendingAutoClearAt = 0
+
+        const latestState = get(scriptureAutoState)
+        if (!latestState.currentDisplayed || pinned) {
+            updateState({ nextAutoClearAt: null, nextAutoClearDelayMs: null })
+            return
+        }
+
+        updateState({ nextAutoClearAt: null, nextAutoClearDelayMs: null })
+        clearDisplayedVerse(true, delay)
+    }, delay)
+}
+
+function formatDelayLabel(delayMs: number): string {
+    if (!delayMs) return "0 seconds"
+    if (delayMs >= 60000 && delayMs % 60000 === 0) {
+        const minutes = delayMs / 60000
+        return `${minutes} minute${minutes === 1 ? "" : "s"}`
+    }
+    if (delayMs >= 1000) {
+        const seconds = delayMs / 1000
+        if (Number.isInteger(seconds)) return `${seconds} second${seconds === 1 ? "" : "s"}`
+        return `${seconds.toFixed(1)} seconds`
+    }
+    return `${delayMs} ms`
+}
+
+function clearDisplayedVerse(auto: boolean, delayMs?: number): boolean {
+    const state = get(scriptureAutoState)
+    const wasDisplaying = Boolean(state.currentDisplayed)
+
+    try {
+        setOutput("slide", null)
+
+        if (wasDisplaying) {
+            updateState({ currentDisplayed: false })
+            if (auto) {
+                const label = delayMs ? formatDelayLabel(delayMs) : null
+                setStatus(label ? `Auto-cleared verse after ${label}.` : "Auto-cleared the current verse.")
+            } else {
+                setStatus("Cleared the current verse from all outputs.")
+            }
+        } else if (!auto) {
+            setStatus("No verse is currently displayed on the outputs.")
+        }
+
+        return true
+    } catch (error) {
+        console.error("Failed to clear scripture output", error)
+        setStatus("Unable to hide the current verse. Check the active outputs.")
+        return false
+    }
+}
+
 function applySuggestion(suggestion: AutoDetectedScripture, auto = false) {
     if (!suggestion) return
 
@@ -1060,6 +1168,8 @@ function applySuggestion(suggestion: AutoDetectedScripture, auto = false) {
                 : null,
         currentDisplayed: true
     })
+
+    scheduleAutoClear(true)
 
     if (!auto) setStatus(`Displaying ${suggestion.reference}`)
 }
@@ -1337,29 +1447,15 @@ export function setAutoScripturePinned(value: boolean): boolean {
 export function clearAutoScriptureDisplay(): boolean {
     initializeAutoScriptureService()
 
-    try {
-        const wasDisplaying = Boolean(get(scriptureAutoState).currentDisplayed)
-        setOutput("slide", null)
-
-        if (wasDisplaying) {
-            updateState({ currentDisplayed: false })
-            setStatus("Cleared the current verse from all outputs.")
-        } else {
-            setStatus("No verse is currently displayed on the outputs.")
-        }
-
-        return true
-    } catch (error) {
-        console.error("Failed to clear scripture output", error)
-        setStatus("Unable to hide the current verse. Check the active outputs.")
-        return false
-    }
+    clearAutoClearTimer()
+    return clearDisplayedVerse(false)
 }
 
 export function resetAutoScriptureSession() {
     initializeAutoScriptureService()
 
     clearAutoApplyTimer()
+    clearAutoClearTimer()
     lastAutoAppliedId = null
     pendingAutoApplyId = null
     pendingAutoApplyDelay = 0
@@ -1393,6 +1489,8 @@ export function resetAutoScriptureSession() {
         currentConfidence: null,
         currentDisplayed: false,
         pinned: false,
+        nextAutoClearAt: null,
+        nextAutoClearDelayMs: null,
         partialTranscript: ""
     })
 
@@ -1601,6 +1699,9 @@ function sanitizeSessionState(value: any): Partial<ScriptureAutoState> {
     if (hasOwn(value, "currentAuto")) partial.currentAuto = Boolean(value.currentAuto)
     if (hasOwn(value, "currentDisplayed")) partial.currentDisplayed = Boolean(value.currentDisplayed)
     if (hasOwn(value, "pinned")) partial.pinned = Boolean(value.pinned)
+    if (hasOwn(value, "nextAutoClearAt")) partial.nextAutoClearAt = toNullableNumber(value.nextAutoClearAt)
+    if (hasOwn(value, "nextAutoClearDelayMs"))
+        partial.nextAutoClearDelayMs = toNullableNumber(value.nextAutoClearDelayMs)
 
     return partial
 }
@@ -1620,6 +1721,9 @@ function sanitizeSettingsSnapshot(snapshot: any, current: ScriptureAutoSettings)
     const autoDisplayDelayMs = hasOwn(snapshot, "autoDisplayDelayMs")
         ? Math.max(0, Math.floor(toNumber(snapshot.autoDisplayDelayMs, current.autoDisplayDelayMs ?? 0, 0, 15000)))
         : current.autoDisplayDelayMs ?? 0
+    const autoClearDelayMs = hasOwn(snapshot, "autoClearDelayMs")
+        ? Math.max(0, Math.floor(toNumber(snapshot.autoClearDelayMs, current.autoClearDelayMs ?? 0, 0, 60000)))
+        : current.autoClearDelayMs ?? 0
     const dedupeWindowMs = hasOwn(snapshot, "dedupeWindowMs")
         ? Math.max(3000, Math.floor(toNumber(snapshot.dedupeWindowMs, current.dedupeWindowMs ?? 15000)))
         : current.dedupeWindowMs ?? 15000
@@ -1640,6 +1744,7 @@ function sanitizeSettingsSnapshot(snapshot: any, current: ScriptureAutoSettings)
         themeId,
         minimumConfidence,
         autoDisplayDelayMs,
+        autoClearDelayMs,
         languageOverrides: overrides,
         recognizerMode: snapshot.recognizerMode === "remote" ? "remote" : current.recognizerMode || "browser",
         remoteServiceUrl
@@ -1699,6 +1804,7 @@ export function importAutoScriptureSession(
     isRestoringSession = true
     try {
         clearAutoApplyTimer()
+        clearAutoClearTimer()
         lastAutoAppliedId = null
         pendingAutoApplyId = null
         pendingAutoApplyDelay = 0
@@ -1731,6 +1837,9 @@ export function importAutoScriptureSession(
         return false
     } finally {
         isRestoringSession = false
+        const queueCurrent = get(scriptureAutoQueue)
+        if (queueCurrent.length) scheduleAutoApply(queueCurrent[0])
+        scheduleAutoClear(true)
     }
 }
 

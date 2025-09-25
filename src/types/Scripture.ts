@@ -119,6 +119,7 @@ export interface ScriptureAutoSettings {
     themeId: string
     minimumConfidence: number
     autoDisplayDelayMs: number
+    autoClearDelayMs: number
     languageOverrides?: Record<string, string>
     recognizerMode?: "browser" | "remote"
     remoteServiceUrl?: string
@@ -152,6 +153,8 @@ export interface ScriptureAutoState {
     nextAutoApplyId: string | null
     nextAutoApplyAt: number | null
     nextAutoApplyDelayMs: number | null
+    nextAutoClearAt: number | null
+    nextAutoClearDelayMs: number | null
 }
 
 export interface AutoTranscriptEntry {
