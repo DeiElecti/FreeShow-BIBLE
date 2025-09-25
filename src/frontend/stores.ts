@@ -153,7 +153,9 @@ export const scriptureAutoSettings: Writable<ScriptureAutoSettings> = writable({
     autoDisplay: false,
     dedupeWindowMs: 15000,
     autoStartListening: false,
-    themeId: "classic"
+    themeId: "classic",
+    minimumConfidence: 0.55,
+    autoDisplayDelayMs: 0
 })
 export const scriptureAutoState: Writable<ScriptureAutoState> = writable({
     supported: true,

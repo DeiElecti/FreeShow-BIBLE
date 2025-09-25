@@ -24,6 +24,9 @@ let activeBibleId: string | null = null
 let previousBibleId: string | null = null
 let lastAutoAppliedId: string | null = null
 let activeScriptureId: string | null = null
+let autoApplyTimer: ReturnType<typeof setTimeout> | null = null
+let pendingAutoApplyId: string | null = null
+let pendingAutoApplyDelay = 0
 
 const MAX_TRANSCRIPT_ITEMS = 200
 
@@ -64,24 +67,62 @@ scriptureAutoState.subscribe((state) => {
 })
 
 scriptureAutoSettings.subscribe((settings) => {
-    const autoDisplay = settings.autoDisplay
+    const minConfidence = Math.min(Math.max(settings.minimumConfidence ?? 0.55, 0), 0.99)
+    applyConfidenceThreshold(minConfidence)
+
     const queue = get(scriptureAutoQueue)
 
-    if (autoDisplay && queue.length) {
-        scheduleAutoApply(queue[0])
+    if (!settings.autoDisplay) {
+        clearAutoApplyTimer()
+        return
     }
+
+    if (queue.length) scheduleAutoApply(queue[0])
 })
 
 scriptureAutoQueue.subscribe((queue) => {
     const settings = get(scriptureAutoSettings)
-    if (!settings.autoDisplay) return
     if (!queue.length) {
         lastAutoAppliedId = null
+        clearAutoApplyTimer()
+        return
+    }
+
+    if (!settings.autoDisplay) {
+        clearAutoApplyTimer()
         return
     }
 
     scheduleAutoApply(queue[0])
 })
+
+function clearAutoApplyTimer() {
+    if (autoApplyTimer) {
+        clearTimeout(autoApplyTimer)
+        autoApplyTimer = null
+    }
+    pendingAutoApplyId = null
+    pendingAutoApplyDelay = 0
+}
+
+function applyConfidenceThreshold(minConfidence: number) {
+    scriptureAutoQueue.update((queue) => {
+        if (!queue.length) return queue
+
+        const filtered = queue.filter((item) => {
+            if (typeof item.confidence !== "number") return true
+            return item.confidence >= minConfidence - 0.0001
+        })
+
+        if (filtered.length === queue.length) return queue
+
+        if (pendingAutoApplyId && !filtered.some((item) => item.id === pendingAutoApplyId)) {
+            clearAutoApplyTimer()
+        }
+
+        return filtered
+    })
+}
 
 function updateState(partial: Partial<ScriptureAutoState>) {
     scriptureAutoState.update((state) => ({ ...state, ...partial }))
@@ -144,11 +185,72 @@ function processSpeechTranscript(text: string) {
     if (suggestions.length) recordDetections(suggestions, "speech")
 }
 
-function scheduleAutoApply(suggestion: AutoDetectedScripture) {
-    if (!suggestion || suggestion.id === lastAutoAppliedId) return
-    if (!get(scriptureAutoSettings).autoDisplay) return
+function scheduleAutoApply(suggestion: AutoDetectedScripture | undefined) {
+    if (!suggestion) {
+        clearAutoApplyTimer()
+        return
+    }
 
-    applySuggestion(suggestion, true)
+    if (suggestion.id === lastAutoAppliedId) return
+
+    const settings = get(scriptureAutoSettings)
+    if (!settings.autoDisplay) {
+        clearAutoApplyTimer()
+        return
+    }
+
+    const minConfidence = settings.minimumConfidence ?? 0
+    if (typeof suggestion.confidence === "number" && suggestion.confidence < minConfidence) return
+
+    const delay = Math.max(0, settings.autoDisplayDelayMs ?? 0)
+
+    if (!delay) {
+        clearAutoApplyTimer()
+        applySuggestion(suggestion, true)
+        return
+    }
+
+    if (pendingAutoApplyId === suggestion.id && pendingAutoApplyDelay === delay && autoApplyTimer) return
+
+    clearAutoApplyTimer()
+    const suggestionId = suggestion.id
+
+    pendingAutoApplyId = suggestionId
+    pendingAutoApplyDelay = delay
+    autoApplyTimer = setTimeout(() => {
+        pendingAutoApplyId = null
+        pendingAutoApplyDelay = 0
+
+        const latestSettings = get(scriptureAutoSettings)
+        if (!latestSettings.autoDisplay) {
+            clearAutoApplyTimer()
+            return
+        }
+
+        const queue = get(scriptureAutoQueue)
+        if (!queue.length) {
+            clearAutoApplyTimer()
+            return
+        }
+
+        const next = queue[0]
+        if (next.id !== suggestionId) {
+            clearAutoApplyTimer()
+            scheduleAutoApply(next)
+            return
+        }
+
+        if (
+            typeof next.confidence === "number" &&
+            next.confidence < (latestSettings.minimumConfidence ?? 0)
+        ) {
+            clearAutoApplyTimer()
+            return
+        }
+
+        clearAutoApplyTimer()
+        applySuggestion(next, true)
+    }, delay)
 }
 
 function applySuggestion(suggestion: AutoDetectedScripture, auto = false) {

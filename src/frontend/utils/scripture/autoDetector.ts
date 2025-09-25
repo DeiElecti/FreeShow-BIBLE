@@ -107,6 +107,7 @@ function pruneProcessedReferences(now: number, dedupeWindow: number) {
 interface RegisterRuntime {
     dedupeWindow: number
     existingKeys: Set<string>
+    minConfidence: number
 }
 
 interface RegisterInfo {
@@ -158,6 +159,8 @@ function registerSuggestion(info: RegisterInfo, runtime: RegisterRuntime): AutoD
     if (span >= 4) confidence -= 0.05
     if (span >= 8) confidence -= 0.05
     confidence = Math.max(0.35, Math.min(0.99, confidence))
+
+    if (confidence < runtime.minConfidence) return null
 
     const suggestion: AutoDetectedScripture = {
         id: `${queueKey}:${timestamp}`,
@@ -353,7 +356,12 @@ export function ingestTranscript(rawText: string, bibleId: string, options: Dete
         existingQueue.map((item) => buildQueueKey(item.bibleId, item.bookNumber, item.chapter, item.verseStart, item.verseEnd))
     )
 
-    const runtime: RegisterRuntime = { dedupeWindow, existingKeys }
+    const minimumConfidence = Math.min(
+        Math.max(settings?.minimumConfidence ?? 0.55, 0),
+        0.99
+    )
+
+    const runtime: RegisterRuntime = { dedupeWindow, existingKeys, minConfidence: minimumConfidence }
     const suggestions: AutoDetectedScripture[] = []
 
     const parsed = parser.parse(trimmed).parsed_entities()
@@ -395,13 +403,13 @@ export function ingestTranscript(rawText: string, bibleId: string, options: Dete
     if (contextDetails) {
         const contextSuggestions = detectContextualReferences(trimmed, {
             bible,
-                bibleId,
-                bookNumber: contextDetails.bookNumber,
-                chapter: contextDetails.chapter,
-                translationName,
-                source: options.source || "speech",
-                raw: trimmed,
-                runtime
+            bibleId,
+            bookNumber: contextDetails.bookNumber,
+            chapter: contextDetails.chapter,
+            translationName,
+            source: options.source || "speech",
+            raw: trimmed,
+            runtime
         })
 
         if (contextSuggestions.length) suggestions.push(...contextSuggestions)

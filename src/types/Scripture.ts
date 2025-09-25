@@ -117,6 +117,8 @@ export interface ScriptureAutoSettings {
     dedupeWindowMs: number
     autoStartListening: boolean
     themeId: string
+    minimumConfidence: number
+    autoDisplayDelayMs: number
 }
 
 export interface ScriptureAutoState {

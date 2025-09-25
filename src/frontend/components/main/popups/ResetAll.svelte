@@ -76,7 +76,9 @@
             autoDisplay: false,
             dedupeWindowMs: 15000,
             autoStartListening: false,
-            themeId: "classic"
+            themeId: "classic",
+            minimumConfidence: 0.55,
+            autoDisplayDelayMs: 0
         })
         scriptureAutoState.set({
             supported: true,

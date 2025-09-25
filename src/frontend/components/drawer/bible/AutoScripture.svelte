@@ -69,6 +69,9 @@
     let transcript: { id: string; text: string; timestamp: number; source: string }[] = []
     let stats = $scriptureAutoStats
     let dedupeControl = 15
+    let confidenceThreshold = 55
+    let autoDelay = 0
+    let autoDelayLabel = "Instant"
     let statusMessage = ""
     let partialTranscript = ""
     let listening = false
@@ -98,6 +101,9 @@
         const storeSeconds = Math.round(($scriptureAutoSettings.dedupeWindowMs ?? 15000) / 1000)
         if (storeSeconds !== dedupeControl) dedupeControl = storeSeconds
     }
+    $: confidenceThreshold = Math.round(($scriptureAutoSettings.minimumConfidence ?? 0.55) * 100)
+    $: autoDelay = $scriptureAutoSettings.autoDisplayDelayMs ?? 0
+    $: autoDelayLabel = formatDelay(autoDelay)
 
     $: currentReference =
         $scriptureAutoState.currentReference || $scriptureAutoState.lastReference || "Waiting for a reference…"
@@ -174,6 +180,26 @@
         scriptureAutoSettings.update((settings) => ({ ...settings, dedupeWindowMs: Math.max(3, value) * 1000 }))
     }
 
+    function handleConfidenceChange(event: Event) {
+        const value = Number((event.target as HTMLInputElement).value)
+        if (!Number.isFinite(value)) return
+        confidenceThreshold = value
+        scriptureAutoSettings.update((settings) => ({
+            ...settings,
+            minimumConfidence: Math.min(Math.max(value / 100, 0), 0.99)
+        }))
+    }
+
+    function handleAutoDelayChange(event: Event) {
+        const value = Number((event.target as HTMLInputElement).value)
+        if (!Number.isFinite(value)) return
+        autoDelay = value
+        scriptureAutoSettings.update((settings) => ({
+            ...settings,
+            autoDisplayDelayMs: Math.min(Math.max(value, 0), 15000)
+        }))
+    }
+
     function handleClearQueue() {
         if (!queue.length) return
         clearSuggestionQueue()
@@ -228,6 +254,13 @@
         if (hours) return `${hours}h ${minutes}m`
         if (minutes) return `${minutes}m ${seconds.toString().padStart(2, "0")}s`
         return `${seconds}s`
+    }
+
+    function formatDelay(value: number) {
+        if (!value) return "Instant"
+        const seconds = value / 1000
+        const precision = seconds % 1 === 0 ? 0 : 2
+        return `${seconds.toFixed(precision)} s`
     }
 
     function closePanel() {
@@ -336,6 +369,38 @@
                                     on:input={handleDedupeChange}
                                 />
                                 <span>{dedupeControl} second{dedupeControl === 1 ? "" : "s"}</span>
+                            </div>
+                        </div>
+
+                        <div class="slider">
+                            <label for="confidence-threshold">Minimum confidence</label>
+                            <div class="range">
+                                <input
+                                    id="confidence-threshold"
+                                    type="range"
+                                    min="35"
+                                    max="95"
+                                    step="1"
+                                    bind:value={confidenceThreshold}
+                                    on:input={handleConfidenceChange}
+                                />
+                                <span>{confidenceThreshold}%</span>
+                            </div>
+                        </div>
+
+                        <div class="slider">
+                            <label for="auto-delay">Auto display delay</label>
+                            <div class="range">
+                                <input
+                                    id="auto-delay"
+                                    type="range"
+                                    min="0"
+                                    max="5000"
+                                    step="250"
+                                    bind:value={autoDelay}
+                                    on:input={handleAutoDelayChange}
+                                />
+                                <span>{autoDelayLabel}</span>
                             </div>
                         </div>
                     </div>

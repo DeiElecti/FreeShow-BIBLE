@@ -311,7 +311,15 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
             autoDisplay: v?.autoDisplay ?? false,
             dedupeWindowMs: v?.dedupeWindowMs ?? 15000,
             autoStartListening: v?.autoStartListening ?? false,
-            themeId: v?.themeId || "classic"
+            themeId: v?.themeId || "classic",
+            minimumConfidence:
+                typeof v?.minimumConfidence === "number" && Number.isFinite(v.minimumConfidence)
+                    ? Math.min(Math.max(v.minimumConfidence, 0), 0.99)
+                    : 0.55,
+            autoDisplayDelayMs:
+                typeof v?.autoDisplayDelayMs === "number" && Number.isFinite(v.autoDisplayDelayMs)
+                    ? Math.min(Math.max(v.autoDisplayDelayMs, 0), 15000)
+                    : 0
         }),
     slidesOptions: (v: any) => slidesOptions.set(v),
     splitLines: (v: any) => splitLines.set(v),
