@@ -26,6 +26,7 @@ import {
     ingestTranscript
 } from "./autoDetector"
 import { getScriptureAutoLanguageLabel } from "./languageOptions"
+import { setOutput } from "../../components/helpers/output"
 
 let recognition: any = null
 let initializationAttempted = false
@@ -60,6 +61,11 @@ let remoteConnected = false
 let remoteStatusText: string | null = null
 let currentGrammarSignature: string | null = null
 let isRestoringSession = false
+let pinned = false
+
+scriptureAutoState.subscribe((state) => {
+    pinned = Boolean(state?.pinned)
+})
 
 const MAX_TRANSCRIPT_ITEMS = 200
 const MAX_IMPORTED_QUEUE_ITEMS = 12
@@ -540,6 +546,29 @@ function setPartialTranscript(value: string) {
     updateState({ partialTranscript: value })
 }
 
+function setPinnedState(value: boolean, options: { silent?: boolean } = {}) {
+    const normalized = Boolean(value)
+    if (pinned === normalized) return
+
+    pinned = normalized
+    updateState({ pinned: normalized })
+
+    if (normalized) {
+        clearAutoApplyTimer()
+        updateState({
+            nextAutoApplyId: null,
+            nextAutoApplyAt: null,
+            nextAutoApplyDelayMs: null
+        })
+        if (!options.silent) setStatus("Current verse pinned. Auto display paused.")
+        return
+    }
+
+    if (!options.silent) setStatus("Pin removed. Auto display resumed.")
+    const queue = get(scriptureAutoQueue)
+    if (queue.length) scheduleAutoApply(queue[0])
+}
+
 function clearRemoteReconnectTimer() {
     if (remoteReconnectTimer) {
         clearTimeout(remoteReconnectTimer)
@@ -886,6 +915,16 @@ function scheduleAutoApply(suggestion: AutoDetectedScripture | undefined) {
         return
     }
 
+    if (pinned) {
+        clearAutoApplyTimer()
+        updateState({
+            nextAutoApplyId: null,
+            nextAutoApplyAt: null,
+            nextAutoApplyDelayMs: null
+        })
+        return
+    }
+
     if (suggestion.id === lastAutoAppliedId) return
 
     const settings = get(scriptureAutoSettings)
@@ -1018,7 +1057,8 @@ function applySuggestion(suggestion: AutoDetectedScripture, auto = false) {
         currentConfidence:
             typeof suggestion.confidence === "number" && Number.isFinite(suggestion.confidence)
                 ? suggestion.confidence
-                : null
+                : null,
+        currentDisplayed: true
     })
 
     if (!auto) setStatus(`Displaying ${suggestion.reference}`)
@@ -1282,6 +1322,40 @@ export function toggleAutoScriptureListening(force?: boolean) {
     }
 }
 
+export function toggleAutoScripturePin(): boolean {
+    initializeAutoScriptureService()
+    setPinnedState(!pinned)
+    return pinned
+}
+
+export function setAutoScripturePinned(value: boolean): boolean {
+    initializeAutoScriptureService()
+    setPinnedState(Boolean(value))
+    return pinned
+}
+
+export function clearAutoScriptureDisplay(): boolean {
+    initializeAutoScriptureService()
+
+    try {
+        const wasDisplaying = Boolean(get(scriptureAutoState).currentDisplayed)
+        setOutput("slide", null)
+
+        if (wasDisplaying) {
+            updateState({ currentDisplayed: false })
+            setStatus("Cleared the current verse from all outputs.")
+        } else {
+            setStatus("No verse is currently displayed on the outputs.")
+        }
+
+        return true
+    } catch (error) {
+        console.error("Failed to clear scripture output", error)
+        setStatus("Unable to hide the current verse. Check the active outputs.")
+        return false
+    }
+}
+
 export function resetAutoScriptureSession() {
     initializeAutoScriptureService()
 
@@ -1317,6 +1391,8 @@ export function resetAutoScriptureSession() {
         currentSource: null,
         currentAuto: false,
         currentConfidence: null,
+        currentDisplayed: false,
+        pinned: false,
         partialTranscript: ""
     })
 
@@ -1523,6 +1599,8 @@ function sanitizeSessionState(value: any): Partial<ScriptureAutoState> {
     if (hasOwn(value, "currentSource")) partial.currentSource = sanitizeOptionalString(value.currentSource)
     if (hasOwn(value, "currentConfidence")) partial.currentConfidence = toNullableConfidence(value.currentConfidence)
     if (hasOwn(value, "currentAuto")) partial.currentAuto = Boolean(value.currentAuto)
+    if (hasOwn(value, "currentDisplayed")) partial.currentDisplayed = Boolean(value.currentDisplayed)
+    if (hasOwn(value, "pinned")) partial.pinned = Boolean(value.pinned)
 
     return partial
 }

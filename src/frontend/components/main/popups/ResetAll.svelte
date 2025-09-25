@@ -103,6 +103,8 @@
             currentSource: null,
             currentAuto: false,
             currentConfidence: null,
+            currentDisplayed: false,
+            pinned: false,
             recognizerMode: "browser",
             remoteConnected: false,
             remoteStatus: null,

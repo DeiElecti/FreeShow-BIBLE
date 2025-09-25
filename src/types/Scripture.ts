@@ -144,6 +144,8 @@ export interface ScriptureAutoState {
     currentSource: string | null
     currentAuto: boolean
     currentConfidence: number | null
+    currentDisplayed: boolean
+    pinned: boolean
     recognizerMode: "browser" | "remote"
     remoteConnected: boolean
     remoteStatus: string | null

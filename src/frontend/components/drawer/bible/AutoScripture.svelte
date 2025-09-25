@@ -21,7 +21,9 @@
         toggleAutoScriptureListening,
         exportAutoScriptureSession,
         resetAutoScriptureSession,
-        importAutoScriptureSession
+        importAutoScriptureSession,
+        clearAutoScriptureDisplay,
+        toggleAutoScripturePin
     } from "../../../utils/scripture/autoService"
     import {
         formatAutoDisplayCountdown,
@@ -112,6 +114,9 @@
     let nextAutoAt: number | null = null
     let autoCountdownLabel = ""
     let countdownTimer: ReturnType<typeof setInterval> | null = null
+    let pinned = false
+    let currentlyDisplaying = false
+    let hasDisplayedReference = false
     let dashboardSection: HTMLElement
     let queueSection: HTMLElement
     let historySection: HTMLElement
@@ -145,6 +150,11 @@
     $: isRemoteMode = recognizerMode === "remote"
     $: nextAutoId = $scriptureAutoState.nextAutoApplyId || null
     $: nextAutoAt = $scriptureAutoState.nextAutoApplyAt || null
+    $: pinned = Boolean($scriptureAutoState.pinned)
+    $: currentlyDisplaying = Boolean($scriptureAutoState.currentDisplayed)
+    $: hasDisplayedReference = Boolean(
+        ($scriptureAutoState.currentReference || "").trim() || ($scriptureAutoState.lastReference || "").trim()
+    )
     $: {
         const statusLower = remoteStatusMessage.toLowerCase()
         const remoteBusy = statusLower.startsWith("connecting") || statusLower.startsWith("reconnecting")
@@ -466,6 +476,14 @@
     function closePanel() {
         dispatch("close")
     }
+
+    function handlePinToggle() {
+        toggleAutoScripturePin()
+    }
+
+    function handleHideCurrent() {
+        clearAutoScriptureDisplay()
+    }
 </script>
 
 <div class="auto-panel" class:hidden={!open}>
@@ -510,7 +528,34 @@
                             <span class="preview-reference">{currentReference}</span>
                             <p>{currentText}</p>
                         </div>
+                        {#if pinned}
+                            <span class="preview-badge pinned">Pinned</span>
+                        {:else if !currentlyDisplaying && hasDisplayedReference}
+                            <span class="preview-badge muted">Hidden</span>
+                        {/if}
                     </div>
+                    <div class="preview-controls">
+                        <button
+                            class="pill-button"
+                            class:pinned={pinned}
+                            type="button"
+                            on:click={handlePinToggle}
+                            aria-pressed={pinned}
+                        >
+                            {pinned ? "Unpin verse" : "Pin verse"}
+                        </button>
+                        <button
+                            class="pill-button ghost"
+                            type="button"
+                            on:click={handleHideCurrent}
+                            disabled={!currentlyDisplaying}
+                        >
+                            Hide verse
+                        </button>
+                    </div>
+                    {#if pinned}
+                        <p class="hint subtle">Auto display is paused while pinned.</p>
+                    {/if}
                     <footer class="preview-footer">
                         <span>{currentTranslation || "No translation selected"}</span>
                         <span>Confidence: {previewConfidenceLabel}</span>
@@ -1111,6 +1156,7 @@
         justify-content: center;
         text-align: center;
         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        position: relative;
     }
 
     .preview-inner {
@@ -1118,6 +1164,31 @@
         flex-direction: column;
         gap: 12px;
         max-width: 100%;
+    }
+
+    .preview-badge {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        padding: 0.3rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        background: rgba(15, 23, 42, 0.55);
+        color: #f8fafc;
+        pointer-events: none;
+    }
+
+    .preview-badge.pinned {
+        background: var(--preview-accent);
+        color: #111827;
+    }
+
+    .preview-badge.muted {
+        background: rgba(15, 23, 42, 0.35);
+        color: rgba(255, 255, 255, 0.85);
     }
 
     .preview-inner p {
@@ -1132,6 +1203,50 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--preview-accent);
+    }
+
+    .preview-controls {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+    }
+
+    .pill-button {
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        padding: 0.35rem 0.9rem;
+        background: transparent;
+        color: inherit;
+        font-size: 0.85rem;
+        font-weight: 600;
+        line-height: 1;
+        cursor: pointer;
+        transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .pill-button:hover:not(:disabled) {
+        border-color: rgba(255, 255, 255, 0.5);
+    }
+
+    .pill-button.pinned {
+        background: var(--preview-accent);
+        color: #111827;
+        border-color: transparent;
+    }
+
+    .pill-button.ghost {
+        border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .pill-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .preview-card .hint.subtle {
+        margin-top: 0.5rem;
+        text-align: right;
     }
 
     .preview-footer {
@@ -1149,7 +1264,7 @@
         align-items: start;
     }
 
-    button {
+    button:not(.pill-button) {
         border: none;
         background: rgba(255, 255, 255, 0.12);
         color: inherit;
@@ -1159,7 +1274,7 @@
         transition: background 0.2s ease;
     }
 
-    button:hover {
+    button:not(.pill-button):hover {
         background: rgba(255, 255, 255, 0.2);
     }
 
