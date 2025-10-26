@@ -16,6 +16,9 @@
         outputs,
         playScripture,
         resized,
+        scriptureAutoQueue,
+        scriptureAutoSettings,
+        scriptureAutoState,
         scriptureHistory,
         scriptureHistoryUsed,
         scriptureMode,
@@ -38,6 +41,18 @@
     import Loader from "../../main/Loader.svelte"
     import Center from "../../system/Center.svelte"
     import { bookIds, fetchBible, formatBibleText, getColorCode, getVersePartLetter, joinRange, loadBible, receiveBibleContent, searchBibleAPI, setBooksCache, splitText } from "./scripture"
+    import AutoScripture from "./AutoScripture.svelte"
+    import type { AutoDetectedScripture } from "../../../../types/Scripture"
+    import {
+        applyAutoScriptureSuggestion,
+        toggleAutoScriptureListening
+    } from "../../../utils/scripture/autoService"
+    import {
+        formatAutoDisplayCountdown,
+        formatAutoClearCountdown,
+        hasActiveAutoDisplayCountdown,
+        hasActiveAutoClearCountdown
+    } from "../../../utils/scripture/countdown"
 
     export let active: string | null
     export let bibles: Bible[]
@@ -210,6 +225,31 @@
     }
 
     let notLoaded = false
+    let autoPanelOpen = false
+    const AUTO_BUTTON_TITLE = "Automatically detect scripture references"
+    let autoListening = false
+    let autoStatusText = ""
+    let autoButtonTitle = `${AUTO_BUTTON_TITLE}. Shift+Click to toggle listening.`
+    let nextAutoApplyId: string | null = null
+    let nextAutoApplyAt: number | null = null
+    let autoCountdownLabel = ""
+    let autoCountdownTimer: ReturnType<typeof setInterval> | null = null
+    let autoClearCountdownLabel = ""
+    let autoClearCountdownTimer: ReturnType<typeof setInterval> | null = null
+    let nextAutoClearAt: number | null = null
+    let autoClearDelay = 0
+    let autoPinned = false
+    let autoCurrentlyDisplayed = false
+    let queueLength = 0
+    let previousQueueLength = 0
+    let autoDisplayEnabled = false
+    let autoRecognizerMode: "browser" | "remote" = "browser"
+    let remoteModeActive = false
+    let remoteConnectedState = false
+    let remoteStatusLabel = ""
+    let remoteLatencyMs: number | null = null
+    let remoteHeartbeatAt: number | null = null
+    let remoteIndicatorTitle = ""
     let listenerId = receiveMain(Main.BIBLE, (data) => {
         if (data.error === "not_found") {
             notLoaded = true
@@ -949,6 +989,35 @@
 
     // Update the displayed bible ID when index changes
     $: displayedBibleId = bibles[biblePreviewIndex]?.id || firstBibleId
+    let currentBibleName = ""
+    $: currentBibleName =
+        (displayedBible?.version as string) ||
+        $scriptures[displayedBibleId]?.customName ||
+        $scriptures[displayedBibleId]?.name ||
+        ""
+
+    $: {
+        const normalizedId = displayedBibleId || null
+        const normalizedName = currentBibleName || null
+        const normalizedScripture = active || null
+
+        scriptureAutoState.update((state) => {
+            if (
+                state.activeBibleId === normalizedId &&
+                state.activeBibleName === normalizedName &&
+                state.activeScriptureId === normalizedScripture
+            ) {
+                return state
+            }
+
+            return {
+                ...state,
+                activeBibleId: normalizedId,
+                activeBibleName: normalizedName,
+                activeScriptureId: normalizedScripture
+            }
+        })
+    }
 
     // Function to swap between available bible translations
     function swapDisplayedBible() {
@@ -992,15 +1061,198 @@
         splittedVerses[displayedId] = newVerses
     }
 
+    $: queueLength = $scriptureAutoQueue.length
+    $: autoDisplayEnabled = $scriptureAutoSettings.autoDisplay
+    $: autoRecognizerMode = ($scriptureAutoSettings.recognizerMode as "browser" | "remote") || "browser"
+    $: remoteModeActive = autoRecognizerMode === "remote"
+    $: remoteConnectedState = Boolean($scriptureAutoState.remoteConnected)
+    $: remoteStatusLabel = ($scriptureAutoState.remoteStatus || "").trim()
+    $: remoteLatencyMs =
+        typeof $scriptureAutoState.remoteLatencyMs === "number"
+            ? $scriptureAutoState.remoteLatencyMs
+            : null
+    $: remoteHeartbeatAt = $scriptureAutoState.remoteLastPingAt || null
+    $: nextAutoApplyId = $scriptureAutoState.nextAutoApplyId || null
+    $: nextAutoApplyAt = $scriptureAutoState.nextAutoApplyAt || null
+    $: nextAutoClearAt = $scriptureAutoState.nextAutoClearAt || null
+    $: autoClearDelay = $scriptureAutoSettings.autoClearDelayMs ?? 0
+    $: autoPinned = Boolean($scriptureAutoState.pinned)
+    $: autoCurrentlyDisplayed = Boolean($scriptureAutoState.currentDisplayed)
+    $: {
+        if (!autoPanelOpen && !autoDisplayEnabled && queueLength > previousQueueLength) autoPanelOpen = true
+        previousQueueLength = queueLength
+    }
+    $: autoListening = $scriptureAutoState.listening
+    $: autoStatusText = ($scriptureAutoState.status || "").trim()
+    $: {
+        if (!remoteModeActive) {
+            remoteIndicatorTitle = ""
+        } else if (remoteLatencyMs !== null) {
+            const heartbeat = remoteHeartbeatAt ? formatRelative(remoteHeartbeatAt) : ""
+            const latencyLabel = `${remoteLatencyMs} ms`
+            remoteIndicatorTitle = heartbeat
+                ? `Remote recognizer connected · ${latencyLabel} · Heartbeat ${heartbeat}`
+                : `Remote recognizer connected · ${latencyLabel}`
+        } else if (remoteStatusLabel) {
+            remoteIndicatorTitle = remoteStatusLabel.toLowerCase().startsWith("remote")
+                ? remoteStatusLabel
+                : `Remote ${remoteStatusLabel}`
+        } else {
+            remoteIndicatorTitle = remoteConnectedState
+                ? "Remote recognizer connected"
+                : "Remote recognizer disconnected"
+        }
+    }
+    $: {
+        const statusParts: string[] = []
+        if (autoStatusText) statusParts.push(autoStatusText)
+
+        if (remoteModeActive) {
+            let remotePart = ""
+            if (remoteLatencyMs !== null) {
+                remotePart = `Remote latency ${remoteLatencyMs} ms`
+                if (remoteHeartbeatAt) {
+                    const heartbeatRelative = formatRelative(remoteHeartbeatAt)
+                    if (heartbeatRelative) remotePart += ` (heartbeat ${heartbeatRelative})`
+                }
+            } else if (remoteStatusLabel) {
+                remotePart = remoteStatusLabel.toLowerCase().startsWith("remote")
+                    ? remoteStatusLabel
+                    : `Remote ${remoteStatusLabel}`
+            } else {
+                remotePart = remoteConnectedState ? "Remote connected" : "Remote disconnected"
+            }
+
+            if (remotePart) statusParts.push(remotePart)
+        }
+
+        const statusSuffix = statusParts.length ? ` — ${statusParts.join(" · ")}` : ""
+        const countdownParts: string[] = []
+        if (autoDisplayEnabled && autoCountdownLabel) {
+            countdownParts.push(`Next auto display in ${autoCountdownLabel}.`)
+        }
+        if (autoClearCountdownLabel) {
+            countdownParts.push(`Auto clear in ${autoClearCountdownLabel}.`)
+        }
+        const countdownSuffix = countdownParts.length ? ` ${countdownParts.join(" ")}` : ""
+        autoButtonTitle = `${AUTO_BUTTON_TITLE}${statusSuffix}.${countdownSuffix} Shift+Click to toggle listening.`
+    }
+
+    function clearAutoCountdownTimer() {
+        if (autoCountdownTimer) {
+            clearInterval(autoCountdownTimer)
+            autoCountdownTimer = null
+        }
+    }
+
+    function refreshAutoCountdownLabel() {
+        autoCountdownLabel = formatAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)
+        if (!hasActiveAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)) {
+            clearAutoCountdownTimer()
+        }
+    }
+
+    function clearAutoClearCountdownTimer() {
+        if (autoClearCountdownTimer) {
+            clearInterval(autoClearCountdownTimer)
+            autoClearCountdownTimer = null
+        }
+    }
+
+    function refreshAutoClearCountdownLabel() {
+        autoClearCountdownLabel = formatAutoClearCountdown(
+            nextAutoClearAt,
+            autoClearDelay,
+            autoPinned,
+            autoCurrentlyDisplayed
+        )
+
+        if (!hasActiveAutoClearCountdown(nextAutoClearAt, autoClearDelay, autoPinned, autoCurrentlyDisplayed)) {
+            clearAutoClearCountdownTimer()
+        }
+    }
+
+    function formatRelative(value: number | null | undefined) {
+        if (!value) return ""
+        const diff = Date.now() - value
+        if (diff < 60_000) return "moments ago"
+        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+        return new Date(value).toLocaleDateString()
+    }
+
+    $: {
+        const shouldTrackCountdown =
+            autoDisplayEnabled && Boolean(nextAutoApplyId) && hasActiveAutoDisplayCountdown(nextAutoApplyAt, autoDisplayEnabled)
+
+        if (shouldTrackCountdown) {
+            if (!autoCountdownTimer) autoCountdownTimer = setInterval(refreshAutoCountdownLabel, 200)
+            refreshAutoCountdownLabel()
+        } else {
+            clearAutoCountdownTimer()
+            if (!shouldTrackCountdown) autoCountdownLabel = ""
+        }
+    }
+
+    $: {
+        const shouldTrackAutoClear = hasActiveAutoClearCountdown(
+            nextAutoClearAt,
+            autoClearDelay,
+            autoPinned,
+            autoCurrentlyDisplayed
+        )
+
+        if (shouldTrackAutoClear) {
+            if (!autoClearCountdownTimer) autoClearCountdownTimer = setInterval(refreshAutoClearCountdownLabel, 200)
+            refreshAutoClearCountdownLabel()
+        } else {
+            clearAutoClearCountdownTimer()
+            if (!shouldTrackAutoClear) autoClearCountdownLabel = ""
+        }
+    }
+
+    onDestroy(() => {
+        clearAutoCountdownTimer()
+        clearAutoClearCountdownTimer()
+    })
+
     $: currentHistory = clone($scriptureHistory.filter((a) => a.id === bibles[0]?.id)).reverse()
 
     $: currentVerses = splittedVerses[displayedBibleId] || []
+
+    function handleAutoApply(event: CustomEvent<{ suggestion: AutoDetectedScripture; auto: boolean }>) {
+        const suggestion = event.detail?.suggestion
+        if (!suggestion) return
+
+        applyAutoScriptureSuggestion(suggestion, event.detail?.auto)
+
+        if (!event.detail.auto) autoPanelOpen = false
+    }
+
+    function handleAutoButtonClick(event: CustomEvent<{ ctrl?: boolean; shift?: boolean; alt?: boolean }>) {
+        const detail = event.detail || {}
+        if (detail.shift || detail.ctrl || detail.alt) {
+            toggleAutoScriptureListening()
+            return
+        }
+        autoPanelOpen = !autoPanelOpen
+    }
 </script>
 
 <svelte:window on:keydown={keydown} on:mouseup={mouseup} />
 
-<div class="scroll" style="flex: 1;overflow-y: auto;">
-    <div class="main">
+<div class="main-wrapper">
+    <div class="auto-overlay" class:hidden={!autoPanelOpen}>
+        <AutoScripture
+            bibleId={displayedBibleId}
+            bibleName={currentBibleName}
+            open={autoPanelOpen}
+            on:apply={handleAutoApply}
+            on:close={() => (autoPanelOpen = false)}
+        />
+    </div>
+    <div class="scroll" style="flex: 1;overflow-y: auto;">
+        <div class="main">
         {#if notLoaded || !bibles[0]}
             <Center faded>
                 <T id="error.bible" />
@@ -1264,6 +1516,7 @@
                 {/if}
             </div>
         {/if}
+        </div>
     </div>
 </div>
 
@@ -1334,6 +1587,40 @@
             </MaterialButton>
         {/if}
 
+        <MaterialButton
+            title={autoButtonTitle}
+            on:click={handleAutoButtonClick}
+            isActive={autoPanelOpen || autoListening}
+        >
+            <span class="auto-toggle" class:listening={autoListening} class:remote={remoteModeActive}>
+                {#if remoteModeActive}
+                    <span
+                        class="remote-indicator"
+                        class:connected={remoteConnectedState}
+                        title={remoteIndicatorTitle || undefined}
+                        aria-hidden="true"
+                    />
+                {/if}
+                <Icon size={1.1} id="voice" white={!autoPanelOpen && !autoListening} />
+                {#if autoListening}
+                    <span class="listening-indicator" aria-hidden="true" />
+                {/if}
+                {#if queueLength}
+                    <span class="badge">{queueLength}</span>
+                {/if}
+                {#if (autoDisplayEnabled && autoCountdownLabel) || autoClearCountdownLabel}
+                    <div class="countdown-stack">
+                        {#if autoDisplayEnabled && autoCountdownLabel}
+                            <span class="countdown-badge" title="Auto display countdown">{autoCountdownLabel}</span>
+                        {/if}
+                        {#if autoClearCountdownLabel}
+                            <span class="countdown-badge auto-clear" title="Auto clear countdown">clr {autoClearCountdownLabel}</span>
+                        {/if}
+                    </div>
+                {/if}
+            </span>
+        </MaterialButton>
+
         <MaterialButton title="scripture.search [Ctrl+B]" on:click={() => (searchBibleActive = true)}>
             <Icon size={1.1} id="search" white />
         </MaterialButton>
@@ -1341,6 +1628,109 @@
 {/if}
 
 <style>
+    .main-wrapper {
+        position: relative;
+        height: 100%;
+    }
+
+    .auto-overlay {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        z-index: 210;
+        pointer-events: none;
+        max-width: min(420px, calc(100% - 32px));
+    }
+
+    .auto-overlay.hidden {
+        display: none;
+    }
+
+    .auto-overlay :global(.auto-panel) {
+        pointer-events: auto;
+    }
+
+    .auto-toggle {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .auto-toggle.listening {
+        color: var(--secondary);
+    }
+
+    .auto-toggle.remote {
+        padding-right: 8px;
+    }
+
+    .auto-toggle .remote-indicator {
+        position: absolute;
+        top: -4px;
+        right: -8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        background: transparent;
+    }
+
+    .auto-toggle .remote-indicator.connected {
+        background: var(--secondary);
+        border-color: var(--secondary);
+        box-shadow: 0 0 6px rgba(123, 220, 255, 0.6);
+    }
+
+    .auto-toggle .listening-indicator {
+        position: absolute;
+        top: -4px;
+        left: -8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--secondary);
+        box-shadow: 0 0 6px rgba(255, 216, 102, 0.7);
+    }
+
+    .auto-toggle .badge {
+        position: absolute;
+        top: -6px;
+        right: -10px;
+        background: var(--secondary);
+        color: #000;
+        border-radius: 999px;
+        padding: 0 6px;
+        font-size: 0.7em;
+        font-weight: 700;
+        min-width: 16px;
+        text-align: center;
+    }
+
+    .auto-toggle .countdown-stack {
+        position: absolute;
+        right: -10px;
+        bottom: -10px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+    }
+
+    .auto-toggle .countdown-badge {
+        font-size: 0.65em;
+        background: rgba(0, 0, 0, 0.6);
+        color: var(--secondary);
+        padding: 1px 6px;
+        border-radius: 999px;
+        white-space: nowrap;
+    }
+
+    .auto-toggle .countdown-badge.auto-clear {
+        background: rgba(255, 120, 120, 0.2);
+        color: #ffb3b3;
+    }
+
     .main {
         display: flex;
         height: 100%;

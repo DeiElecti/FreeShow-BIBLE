@@ -60,6 +60,10 @@ You are welcome to contribute to the code!
 6. In the terminal, run: `npm install`
 7. To start the app, run: `npm start`
 
+## Additional documentation
+
+- [Building Real-Time Bible Verse Display Software](docs/real-time-bible-verse-display.md)
+
 ## Join us on Slack
 
 If you would like to get involved contributing in any way, head over to our [Slack Channel](https://join.slack.com/t/livechurchsolutions/shared_invite/zt-i88etpo5-ZZhYsQwQLVclW12DKtVflg) and introduce yourself. We'd love to hear from you.

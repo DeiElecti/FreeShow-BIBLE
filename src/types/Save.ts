@@ -23,6 +23,7 @@ export type SaveListSyncedSettings =
     | "audioPlaylists"
     | "scriptures"
     | "scriptureSettings"
+    | "scriptureAutoSettings"
     | "groups"
     | "midiIn"
     | "emitters"

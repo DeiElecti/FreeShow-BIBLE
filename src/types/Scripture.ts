@@ -92,3 +92,92 @@ export interface VerseText {
     reference: string // "Genesis 1:1"
     verseCount: number // 1
 }
+
+export interface AutoDetectedScripture {
+    id: string
+    osis: string
+    bibleId: string
+    bookNumber: number
+    chapter: number
+    verseStart: number
+    verseEnd: number
+    verses: string[]
+    reference: string
+    text: string
+    translation: string
+    source: string
+    createdAt: number
+    raw: string
+    confidence?: number
+}
+
+export interface ScriptureAutoSettings {
+    language: string
+    autoDisplay: boolean
+    dedupeWindowMs: number
+    autoStartListening: boolean
+    themeId: string
+    minimumConfidence: number
+    autoDisplayDelayMs: number
+    autoClearDelayMs: number
+    languageOverrides?: Record<string, string>
+    recognizerMode?: "browser" | "remote"
+    remoteServiceUrl?: string
+}
+
+export interface ScriptureAutoState {
+    supported: boolean
+    listening: boolean
+    status: string
+    partialTranscript: string
+    lastHeardAt: number | null
+    lastReference: string | null
+    lastSource: string | null
+    lastText: string | null
+    lastConfidence: number | null
+    activeBibleId: string | null
+    activeBibleName: string | null
+    activeScriptureId: string | null
+    currentReference: string | null
+    currentText: string | null
+    currentTranslation: string | null
+    currentAppliedAt: number | null
+    currentSource: string | null
+    currentAuto: boolean
+    currentConfidence: number | null
+    currentDisplayed: boolean
+    pinned: boolean
+    recognizerMode: "browser" | "remote"
+    remoteConnected: boolean
+    remoteStatus: string | null
+    remoteLatencyMs: number | null
+    remoteLastPingAt: number | null
+    nextAutoApplyId: string | null
+    nextAutoApplyAt: number | null
+    nextAutoApplyDelayMs: number | null
+    nextAutoClearAt: number | null
+    nextAutoClearDelayMs: number | null
+}
+
+export interface AutoTranscriptEntry {
+    id: string
+    timestamp: number
+    text: string
+    source: string
+}
+
+export interface ScriptureAutoStats {
+    startedAt: number
+    lastUpdated: number | null
+    detected: number
+    speechDetections: number
+    manualDetections: number
+    displayed: number
+    autoDisplayed: number
+    manualSubmissions: number
+    dismissed: number
+    confidenceSamples: number
+    averageConfidence: number
+    suppressedDuplicates: number
+    suppressedLowConfidence: number
+}

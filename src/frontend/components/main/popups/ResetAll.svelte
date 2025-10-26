@@ -2,7 +2,24 @@
     import { Main } from "../../../../types/IPC/Main"
     import type { SaveData } from "../../../../types/Save"
     import { sendMain } from "../../../IPC/main"
-    import { activeEdit, activePage, activePopup, activeShow, dataPath, deletedShows, drawSettings, renamedShows, scripturesCache, showsPath } from "../../../stores"
+    import {
+        activeEdit,
+        activePage,
+        activePopup,
+        activeShow,
+        dataPath,
+        deletedShows,
+        drawSettings,
+        renamedShows,
+        scriptureAutoHistory,
+        scriptureAutoQueue,
+        scriptureAutoSettings,
+        scriptureAutoState,
+        scriptureAutoStats,
+        scriptureAutoTranscript,
+        scripturesCache,
+        showsPath
+    } from "../../../stores"
     import { save } from "../../../utils/save"
     import T from "../../helpers/T.svelte"
     import MaterialButton from "../../inputs/MaterialButton.svelte"
@@ -51,6 +68,70 @@
         // dataPath.set("")
         // showsCache.set({})
         scripturesCache.set({})
+        scriptureAutoHistory.set([])
+        scriptureAutoTranscript.set([])
+        scriptureAutoQueue.set([])
+        scriptureAutoSettings.set({
+            language: "en-US",
+            autoDisplay: false,
+            dedupeWindowMs: 15000,
+            autoStartListening: false,
+            themeId: "classic",
+            minimumConfidence: 0.55,
+            autoDisplayDelayMs: 0,
+            autoClearDelayMs: 0,
+            languageOverrides: {},
+            recognizerMode: "browser",
+            remoteServiceUrl: "",
+        })
+        scriptureAutoState.set({
+            supported: true,
+            listening: false,
+            status: "",
+            partialTranscript: "",
+            lastHeardAt: null,
+            lastReference: null,
+            lastSource: null,
+            lastText: null,
+            lastConfidence: null,
+            activeBibleId: null,
+            activeBibleName: null,
+            activeScriptureId: null,
+            currentReference: null,
+            currentText: null,
+            currentTranslation: null,
+            currentAppliedAt: null,
+            currentSource: null,
+            currentAuto: false,
+            currentConfidence: null,
+            currentDisplayed: false,
+            pinned: false,
+            recognizerMode: "browser",
+            remoteConnected: false,
+            remoteStatus: null,
+            remoteLatencyMs: null,
+            remoteLastPingAt: null,
+            nextAutoApplyId: null,
+            nextAutoApplyAt: null,
+            nextAutoApplyDelayMs: null,
+            nextAutoClearAt: null,
+            nextAutoClearDelayMs: null
+        })
+        scriptureAutoStats.set({
+            startedAt: Date.now(),
+            lastUpdated: null,
+            detected: 0,
+            speechDetections: 0,
+            manualDetections: 0,
+            displayed: 0,
+            autoDisplayed: 0,
+            manualSubmissions: 0,
+            dismissed: 0,
+            confidenceSamples: 0,
+            averageConfidence: 0,
+            suppressedDuplicates: 0,
+            suppressedLowConfidence: 0
+        })
         deletedShows.set([])
         renamedShows.set([])
 

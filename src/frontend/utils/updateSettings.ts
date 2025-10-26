@@ -80,7 +80,17 @@ import {
 } from "../stores"
 import { OUTPUT } from "./../../types/Channels"
 import type { SaveListSettings, SaveListSyncedSettings } from "./../../types/Save"
-import { currentWindow, maxConnections, outputs, scriptureSettings, scriptures, splitLines, transitionData, volume } from "./../stores"
+import {
+    currentWindow,
+    maxConnections,
+    outputs,
+    scriptureAutoSettings,
+    scriptureSettings,
+    scriptures,
+    splitLines,
+    transitionData,
+    volume
+} from "./../stores"
 import { checkForUpdates } from "./checkForUpdates"
 import { setLanguage } from "./language"
 import { send } from "./request"
@@ -295,6 +305,34 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
     resized: (v: any) => resized.set(v),
     scriptures: (v: any) => scriptures.set(v),
     scriptureSettings: (v: any) => scriptureSettings.set(v),
+    scriptureAutoSettings: (v: any) =>
+        scriptureAutoSettings.set({
+            language: v?.language || "en-US",
+            autoDisplay: v?.autoDisplay ?? false,
+            dedupeWindowMs: v?.dedupeWindowMs ?? 15000,
+            autoStartListening: v?.autoStartListening ?? false,
+            themeId: v?.themeId || "classic",
+            minimumConfidence:
+                typeof v?.minimumConfidence === "number" && Number.isFinite(v.minimumConfidence)
+                    ? Math.min(Math.max(v.minimumConfidence, 0), 0.99)
+                    : 0.55,
+            autoDisplayDelayMs:
+                typeof v?.autoDisplayDelayMs === "number" && Number.isFinite(v.autoDisplayDelayMs)
+                    ? Math.min(Math.max(v.autoDisplayDelayMs, 0), 15000)
+                    : 0,
+            autoClearDelayMs:
+                typeof v?.autoClearDelayMs === "number" && Number.isFinite(v.autoClearDelayMs)
+                    ? Math.min(Math.max(v.autoClearDelayMs, 0), 60000)
+                    : 0,
+            languageOverrides: Object.fromEntries(
+                Object.entries(v?.languageOverrides || {}).filter((entry) => {
+                    const [key, value] = entry
+                    return typeof key === "string" && typeof value === "string" && key
+                })
+            ),
+            recognizerMode: v?.recognizerMode === "remote" ? "remote" : "browser",
+            remoteServiceUrl: typeof v?.remoteServiceUrl === "string" ? v.remoteServiceUrl : ""
+        }),
     slidesOptions: (v: any) => slidesOptions.set(v),
     splitLines: (v: any) => splitLines.set(v),
     templateCategories: (v: any) => templateCategories.set(v),
